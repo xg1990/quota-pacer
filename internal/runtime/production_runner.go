@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"credential-priority/internal/apply"
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
-	"credential-priority/internal/priority"
-	"credential-priority/internal/schedule"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/apply"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/priority"
+	"quota-pacer/internal/schedule"
+	"quota-pacer/internal/state"
 )
 
 var errMissingHostCallbacks = errors.New("runtime: host callbacks are required")
@@ -518,7 +518,7 @@ func scheduleOptions(cfg config.Config, now time.Time) schedule.Options {
 }
 
 func priorityOptions(cfg config.Config, now time.Time) priority.Options {
-	options := priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange, PaidFirst: true, ResetBoostWithin: 24 * time.Hour, ResetBoost: 50}
+	options := priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange, PaidFirst: true}
 	if cfg.PriorityRules.Enabled {
 		freeDepletedPriority := cfg.PriorityRules.Codex.FreeDepletedPriority
 		freeDepletedDisabled := cfg.PriorityRules.Codex.FreeDepletedDisabled

@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
 )
 
 func TestParseAvailableModels_GeminiGroup(t *testing.T) {

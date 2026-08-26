@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
@@ -58,10 +58,8 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	}
 
 	options := Options{
-		Now:              now,
-		MaxPriority:      100,
-		ResetBoostWithin: 24 * time.Hour,
-		ResetBoost:       50,
+		Now:         now,
+		MaxPriority: 100,
 	}
 
 	plan := PlanFreshOnly(credentials, evidence, options)
@@ -90,53 +88,6 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	}
 	if item1.Disabled || item2.Disabled {
 		t.Errorf("expected active credentials not disabled")
-	}
-}
-
-func TestPlanFreshOnly_Claude_NearResetBoost(t *testing.T) {
-	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
-	resetAtNear := now.Add(30 * time.Minute) // near reset (< 24h)
-	rem := int64(10)
-
-	credentials := []core.Credential{
-		{
-			Name:      "claude-boost",
-			AuthIndex: "auth-cb",
-			Provider:  core.ProviderClaude,
-			Type:      core.CredentialTypeClaude,
-			Priority:  10,
-		},
-	}
-
-	evidence := []ProbeEvidence{
-		{
-			Provider:          core.ProviderClaude,
-			AuthIndex:         "auth-cb",
-			ObservedAt:        now,
-			ResetAt:           &resetAtNear,
-			LongWindowResetAt: &resetAtNear,
-			Remaining:         &rem,
-			Freshness:         core.FreshnessFresh,
-			ProbeStatus:       core.ProbeStatusReady,
-			Status:            EvidenceStatusReady,
-			PlanType:          core.PlanTypePro,
-			EvidenceFresh:     true,
-		},
-	}
-
-	options := Options{
-		Now:              now,
-		MaxPriority:      100,
-		ResetBoostWithin: 24 * time.Hour,
-		ResetBoost:       50,
-	}
-
-	plan := PlanFreshOnly(credentials, evidence, options)
-	if len(plan.Items) != 1 {
-		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
-	}
-	if plan.Items[0].Priority != 999 {
-		t.Errorf("expected boosted priority 999, got %d", plan.Items[0].Priority)
 	}
 }
 

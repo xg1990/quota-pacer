@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/priority"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/priority"
 )
 
 type mockHost struct {

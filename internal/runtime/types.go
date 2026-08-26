@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/host"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/host"
 )
 
 // ErrRunInProgress 表示本轮自动排序任务仍在执行，新的触发被 single-flight 拒绝。
@@ -53,7 +53,7 @@ type TaskRequest struct {
 	AuthIndexes []string
 }
 
-// TaskRunner 执行一轮 credential-priority 任务。
+// TaskRunner 执行一轮 quota-pacer 任务。
 type TaskRunner func(ctx context.Context, request TaskRequest) error
 
 // Options 提供 runtime 的可注入依赖。

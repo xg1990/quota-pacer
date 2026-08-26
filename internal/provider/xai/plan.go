@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
 )
 
 // PlanClass 是 xAI 套餐粗分类（free / paid），独立于业务额度冷却。
@@ -445,7 +445,7 @@ func planHeaders(request PlanRequest) host.Header {
 	return host.Header{
 		"Accept":                []string{"application/json"},
 		"Authorization":         []string{"Bearer " + token},
-		"User-Agent":            []string{"credential-priority/xai-plan"},
+		"User-Agent":            []string{"quota-pacer/xai-plan"},
 		"X-XAI-Token-Auth":      []string{"xai-grok-cli"},
 		"x-grok-client-version": []string{"0.2.93"},
 	}

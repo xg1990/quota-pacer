@@ -3,7 +3,7 @@ package provider
 import (
 	"testing"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 func TestRegistry_Evaluate_Claude(t *testing.T) {

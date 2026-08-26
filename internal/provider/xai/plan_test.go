@@ -3,7 +3,7 @@ package xai
 import (
 	"testing"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 func TestClassifyPlan_Paid(t *testing.T) {

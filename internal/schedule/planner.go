@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 // ErrInvalidOptions 标识探测计划参数不满足调度器不变量。

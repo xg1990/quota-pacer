@@ -3,7 +3,7 @@ package xai
 import (
 	"context"
 
-	"credential-priority/internal/host"
+	"quota-pacer/internal/host"
 )
 
 // httpDoer 必须能返回非 2xx 响应体（xAI settings/billing 鉴权失败常为 401）。

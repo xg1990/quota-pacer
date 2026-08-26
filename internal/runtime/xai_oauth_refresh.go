@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/host"
-	"credential-priority/internal/provider/xai"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/provider/xai"
 )
 
 // maybeRefreshXAIAuth 探测前/401 强制路径：GetAuth→Decide→HTTP refresh→SaveAuth；失败不阻断探测。

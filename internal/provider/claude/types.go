@@ -3,7 +3,7 @@ package claude
 import (
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 // DefaultAPIBaseURL 是 Anthropic 官方 API 根路径。

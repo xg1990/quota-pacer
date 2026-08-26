@@ -7,17 +7,17 @@ import (
 	"sync"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
-	"credential-priority/internal/priority"
-	"credential-priority/internal/provider"
-	"credential-priority/internal/provider/antigravity"
-	"credential-priority/internal/provider/claude"
-	"credential-priority/internal/provider/codex"
-	"credential-priority/internal/provider/xai"
-	"credential-priority/internal/schedule"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/priority"
+	"quota-pacer/internal/provider"
+	"quota-pacer/internal/provider/antigravity"
+	"quota-pacer/internal/provider/claude"
+	"quota-pacer/internal/provider/codex"
+	"quota-pacer/internal/provider/xai"
+	"quota-pacer/internal/schedule"
+	"quota-pacer/internal/state"
 )
 
 type collectInput struct {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/provider/xai"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/provider/xai"
+	"quota-pacer/internal/state"
 )
 
 // xAI free 策略常量（用户拍板）。

@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
-	"credential-priority/internal/priority"
-	"credential-priority/internal/provider/antigravity"
-	"credential-priority/internal/provider/claude"
-	"credential-priority/internal/schedule"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/priority"
+	"quota-pacer/internal/provider/antigravity"
+	"quota-pacer/internal/provider/claude"
+	"quota-pacer/internal/schedule"
+	"quota-pacer/internal/state"
 )
 
 func TestRecordClaudeProbeResult_SuccessAndFailure(t *testing.T) {

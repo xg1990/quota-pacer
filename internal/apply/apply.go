@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"credential-priority/internal/priority"
+	"quota-pacer/internal/priority"
 )
 
 // ChangeStatus 表示单个计划变更的执行结果。

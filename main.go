@@ -37,31 +37,31 @@ typedef struct cliproxy_plugin_api {
 #define CPA_PLUGIN_EXPORT
 #endif
 
-extern CPA_PLUGIN_EXPORT int credentialPriorityPluginCall(char* method, uint8_t* request, size_t request_len, cliproxy_buffer* response);
-extern CPA_PLUGIN_EXPORT void credentialPriorityPluginFreeBuffer(void* ptr, size_t len);
-extern CPA_PLUGIN_EXPORT void credentialPriorityPluginShutdown(void);
+extern CPA_PLUGIN_EXPORT int quotaPacerPluginCall(char* method, uint8_t* request, size_t request_len, cliproxy_buffer* response);
+extern CPA_PLUGIN_EXPORT void quotaPacerPluginFreeBuffer(void* ptr, size_t len);
+extern CPA_PLUGIN_EXPORT void quotaPacerPluginShutdown(void);
 
-static inline void set_credential_priority_plugin_api(cliproxy_plugin_api* plugin) {
+static inline void set_quota_pacer_plugin_api(cliproxy_plugin_api* plugin) {
 	plugin->abi_version = 1;
-	plugin->call = credentialPriorityPluginCall;
-	plugin->free_buffer = credentialPriorityPluginFreeBuffer;
-	plugin->shutdown = credentialPriorityPluginShutdown;
+	plugin->call = quotaPacerPluginCall;
+	plugin->free_buffer = quotaPacerPluginFreeBuffer;
+	plugin->shutdown = quotaPacerPluginShutdown;
 }
 
 static const cliproxy_host_api* stored_host;
 
-static inline void store_credential_priority_host_api(const cliproxy_host_api* host) {
+static inline void store_quota_pacer_host_api(const cliproxy_host_api* host) {
 	stored_host = host;
 }
 
-static inline int call_credential_priority_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+static inline int call_quota_pacer_host_api(const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
 	if (stored_host == NULL || stored_host->call == NULL) {
 		return 1;
 	}
 	return stored_host->call(stored_host->host_ctx, method, request, request_len, response);
 }
 
-static inline void free_credential_priority_host_buffer(void* ptr, size_t len) {
+static inline void free_quota_pacer_host_buffer(void* ptr, size_t len) {
 	if (stored_host != NULL && stored_host->free_buffer != NULL && ptr != NULL) {
 		stored_host->free_buffer(ptr, len);
 	}
@@ -75,8 +75,8 @@ import (
 	"fmt"
 	"unsafe"
 
-	"credential-priority/internal/host"
-	pluginruntime "credential-priority/internal/runtime"
+	"quota-pacer/internal/host"
+	pluginruntime "quota-pacer/internal/runtime"
 )
 
 var cpaRuntime = pluginruntime.New(pluginruntime.Options{Host: hostCallbackAdapter{}})
@@ -88,14 +88,14 @@ func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_a
 	if plugin == nil {
 		return -1
 	}
-	C.store_credential_priority_host_api(host)
+	C.store_quota_pacer_host_api(host)
 	cpaRuntime = pluginruntime.New(pluginruntime.Options{Host: hostCallbackAdapter{}})
-	C.set_credential_priority_plugin_api(plugin)
+	C.set_quota_pacer_plugin_api(plugin)
 	return 0
 }
 
-//export credentialPriorityPluginCall
-func credentialPriorityPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+//export quotaPacerPluginCall
+func quotaPacerPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
 	if response == nil {
 		return -1
 	}
@@ -110,14 +110,14 @@ func credentialPriorityPluginCall(method *C.char, request *C.uint8_t, requestLen
 	return writeResponse(response, cpaRuntime.Handle(context.Background(), methodName, requestBytes))
 }
 
-//export credentialPriorityPluginFreeBuffer
-func credentialPriorityPluginFreeBuffer(ptr unsafe.Pointer, length C.size_t) {
+//export quotaPacerPluginFreeBuffer
+func quotaPacerPluginFreeBuffer(ptr unsafe.Pointer, length C.size_t) {
 	_ = length
 	C.free(ptr)
 }
 
-//export credentialPriorityPluginShutdown
-func credentialPriorityPluginShutdown() {
+//export quotaPacerPluginShutdown
+func quotaPacerPluginShutdown() {
 	_ = cpaRuntime.Shutdown(context.Background())
 }
 
@@ -213,10 +213,10 @@ func callHost(ctx context.Context, method string, payload any, target any) error
 		requestPtr = (*C.uint8_t)(cPayload)
 	}
 	var response C.cliproxy_buffer
-	callCode := C.call_credential_priority_host_api(cMethod, requestPtr, C.size_t(len(rawPayload)), &response)
+	callCode := C.call_quota_pacer_host_api(cMethod, requestPtr, C.size_t(len(rawPayload)), &response)
 	rawResponse := copyHostResponse(response)
 	if response.ptr != nil {
-		C.free_credential_priority_host_buffer(unsafe.Pointer(response.ptr), response.len)
+		C.free_quota_pacer_host_buffer(unsafe.Pointer(response.ptr), response.len)
 	}
 	if len(rawResponse) == 0 {
 		return fmt.Errorf("host callback %s returned no response, code=%d", method, int(callCode))

@@ -13,7 +13,7 @@ func extractPluginConfigYAML(data string) string {
 	}
 	lines := strings.Split(data, "\n")
 	for index, line := range lines {
-		if strings.TrimSpace(line) != "credential-priority:" || !isCPAPluginConfigPath(lines, index) {
+		if strings.TrimSpace(line) != "quota-pacer:" || !isCPAPluginConfigPath(lines, index) {
 			continue
 		}
 		indent := leadingSpaces(line)

@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/apply"
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
-	"credential-priority/internal/priority"
-	"credential-priority/internal/schedule"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/apply"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/priority"
+	"quota-pacer/internal/schedule"
+	"quota-pacer/internal/state"
 )
 
 type recordingApplyHost struct {

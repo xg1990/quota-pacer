@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 func TestStore_MarkAndNeedsProbe(t *testing.T) {

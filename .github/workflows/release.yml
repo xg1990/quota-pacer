@@ -15,14 +15,14 @@ permissions:
   contents: read
 
 env:
-  PLUGIN_NAME: credential-priority
+  PLUGIN_NAME: quota-pacer
   INPUT_TAG: ${{ inputs.tag }}
 
 jobs:
   prepare-release:
     name: Prepare release
     runs-on: ubuntu-latest
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     permissions:
       contents: write
     steps:
@@ -69,7 +69,7 @@ jobs:
   build-posix:
     name: Build ${{ matrix.goos }}_${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     needs: prepare-release
     permissions:
       contents: write
@@ -145,7 +145,7 @@ jobs:
   build-windows:
     name: Build windows_amd64
     runs-on: windows-latest
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     needs: prepare-release
     permissions:
       contents: write
@@ -218,7 +218,7 @@ jobs:
   build-windows-arm64:
     name: Build windows_arm64
     runs-on: ubuntu-latest
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     needs: prepare-release
     permissions:
       contents: write
@@ -282,7 +282,7 @@ jobs:
   build-freebsd:
     name: Build freebsd_amd64
     runs-on: ubuntu-latest
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     needs: prepare-release
     permissions:
       contents: write
@@ -341,7 +341,7 @@ jobs:
   publish-release:
     name: Publish checksums and notes
     runs-on: ubuntu-latest
-    if: github.repository == 'xg1990/credential-priority' || github.repository == 'Cody292/credential-priority'
+    if: github.repository == 'xg1990/quota-pacer'
     permissions:
       contents: write
     needs:

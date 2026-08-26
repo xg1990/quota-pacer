@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/host"
+	"quota-pacer/internal/host"
 )
 
 const (

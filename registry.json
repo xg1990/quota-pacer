@@ -2,15 +2,15 @@
   "schema_version": 1,
   "plugins": [
     {
-      "id": "credential-priority",
-      "name": "Credential Priority",
-      "description": "Automatically sorts Antigravity, Codex, Claude, and xAI credentials by fresh quota evidence.",
+      "id": "quota-pacer",
+      "name": "Quota Pacer",
+      "description": "Automatically paces Antigravity, Codex, Claude, and xAI credential priority by fresh quota evidence.",
       "author": "xg1990",
-      "version": "1.3.8",
-      "repository": "https://github.com/xg1990/credential-priority",
-      "homepage": "https://github.com/xg1990/credential-priority",
+      "version": "1.0.0",
+      "repository": "https://github.com/xg1990/quota-pacer",
+      "homepage": "https://github.com/xg1990/quota-pacer",
       "license": "MIT",
-      "tags": ["credential", "priority", "quota", "management", "claude"]
+      "tags": ["credential", "pacing", "quota", "management", "claude"]
     }
   ]
 }

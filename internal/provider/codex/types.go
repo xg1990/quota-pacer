@@ -3,7 +3,7 @@ package codex
 import (
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 // WhamUsageURL 是 ChatGPT wham usage 的宿主代理目标地址。

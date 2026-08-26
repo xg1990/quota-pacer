@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 type fixedClock struct {

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 // SchemaVersion 是当前缓存条目的结构版本。

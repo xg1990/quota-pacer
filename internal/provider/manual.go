@@ -1,6 +1,6 @@
 package provider
 
-import "credential-priority/internal/core"
+import "quota-pacer/internal/core"
 
 type manualStrategy struct {
 	provider core.Provider

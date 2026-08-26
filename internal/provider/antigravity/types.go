@@ -3,8 +3,8 @@ package antigravity
 import (
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
 )
 
 // ModelGroup 表示 Antigravity 上游独立计量的模型组。

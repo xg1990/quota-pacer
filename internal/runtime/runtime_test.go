@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/host"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/host"
 )
 
 type mockHostCallbacks struct {

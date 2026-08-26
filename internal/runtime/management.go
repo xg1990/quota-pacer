@@ -11,10 +11,10 @@ import (
 	"net/url"
 	"strings"
 
-	"credential-priority/internal/apply"
-	"credential-priority/internal/config"
-	"credential-priority/internal/host"
-	"credential-priority/internal/management"
+	"quota-pacer/internal/apply"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/management"
 )
 
 // ManagementRequest 是 CPA management.handle 调用传入的已解析 HTTP 请求信封。
@@ -57,12 +57,12 @@ type managementRunner struct {
 func (r *Runtime) registerManagement() []byte {
 	result := managementRegistration{
 		Routes: []managementRoute{
-			{Method: http.MethodPost, Path: "/plugins/credential-priority/run"},
-			{Method: http.MethodGet, Path: "/plugins/credential-priority/diagnostics"},
-			{Method: http.MethodGet, Path: "/plugins/credential-priority/snapshot/latest"},
+			{Method: http.MethodPost, Path: "/plugins/quota-pacer/run"},
+			{Method: http.MethodGet, Path: "/plugins/quota-pacer/diagnostics"},
+			{Method: http.MethodGet, Path: "/plugins/quota-pacer/snapshot/latest"},
 		},
 		Resources: []managementResource{
-			{Path: "/status", Menu: "Credential Priority", Description: "Shows credential priority status and audit summary."},
+			{Path: "/status", Menu: "Quota Pacer", Description: "Shows credential priority status and audit summary."},
 		},
 	}
 	return envelopeManagement(result, nil)
@@ -152,7 +152,7 @@ func firstNonEmpty(values ...string) string {
 
 // routeSourceHeader 标记请求来自 resource 还是 management，供 Handler 做边界校验。
 // 仅插件内部使用，不依赖宿主透传。
-const routeSourceHeader = "X-Credential-Priority-Route-Source"
+const routeSourceHeader = "X-Quota-Pacer-Route-Source"
 
 func (r ManagementRequest) toHTTPRequest(ctx context.Context) (*http.Request, error) {
 	normalized, source := normalizeManagementPath(r.Path)

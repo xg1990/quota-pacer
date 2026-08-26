@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
-	"credential-priority/internal/priority"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/priority"
 )
 
 // PlanSnapshot 是写入前可安全保存的计划快照。

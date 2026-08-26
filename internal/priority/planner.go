@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 const maxEnabledPriority = 999
@@ -29,8 +29,6 @@ type Options struct {
 	XAIMonthlyAndWeeklyDepletedDisabled *bool
 	MinChange                           int
 	PaidFirst                           bool
-	ResetBoostWithin                    time.Duration
-	ResetBoost                          int
 }
 
 // ProbeEvidence 是本轮 probe 产出的排序证据；EvidenceFresh=false 时不得驱动变更。
@@ -289,13 +287,6 @@ func isXAIAuthInvalid(credential core.Credential, evidence ProbeEvidence) bool {
 	return isXAICredential(credential) && evidence.Status == EvidenceStatusAuthInvalid
 }
 
-func isAntigravityWeeklyDepletedItem(item PlanItem) bool {
-	return planItemProvider(item) == core.ProviderAntigravity &&
-		isFreeOrUnknownPlan(item.PlanType) &&
-		item.Remaining != nil &&
-		*item.Remaining <= 0
-}
-
 func isFreeOrUnknownPlan(planType core.PlanType) bool {
 	return planType == core.PlanTypeFree || planType == core.PlanTypeUnknown
 }
@@ -443,7 +434,7 @@ func planFreshPositive(items []PlanItem, options Options) {
 	}
 	priority := startPriority
 	for _, itemIndex := range candidates {
-		items[itemIndex].Priority = plannedPriority(items[itemIndex], priority, options)
+		items[itemIndex].Priority = priority
 		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
 		items[itemIndex].Disabled = false
 		items[itemIndex].Reason = "fresh remaining positive"
@@ -481,31 +472,17 @@ func ensureUniquePriorities(items []PlanItem, options Options) {
 	slices.SortStableFunc(group, func(left int, right int) int {
 		return compareUniquenessCandidates(items[left], items[right], options)
 	})
-	boosted := make(map[int]struct{}, len(group))
 	assigned := make(map[int]int, len(group))
 	used := make(map[int]struct{}, len(group))
-	boostPriority := maxEnabledPriority
-	for _, itemIndex := range group {
-		if !items[itemIndex].EvidenceFresh || resetBoost(items[itemIndex], options) <= 0 {
-			continue
-		}
-		boosted[itemIndex] = struct{}{}
-		nextPriority := nextAvailablePriority(boostPriority, used)
-		assigned[itemIndex] = nextPriority
-		used[nextPriority] = struct{}{}
-		boostPriority = nextPriority - 1
-	}
 	startPriority := normalizedMaxPriority(options.MaxPriority)
 	if startPriority < 1 {
 		startPriority = 100
 	}
 	priority := startPriority
 	for _, itemIndex := range group {
-		if _, isBoosted := boosted[itemIndex]; !isBoosted {
-			nextPriority := nextAvailablePriority(priority, used)
-			assigned[itemIndex] = nextPriority
-			used[nextPriority] = struct{}{}
-		}
+		nextPriority := nextAvailablePriority(priority, used)
+		assigned[itemIndex] = nextPriority
+		used[nextPriority] = struct{}{}
 		priority--
 		if priority < 1 {
 			priority = 1
@@ -642,15 +619,6 @@ func positiveCandidates(items []PlanItem, options Options) []int {
 			continue
 		}
 		if *item.Remaining > 0 {
-			candidates = append(candidates, index)
-			continue
-		}
-		if isAntigravityWeeklyDepletedItem(item) {
-			continue
-		}
-		// Remaining<=0：仅 long-window near-reset 可再入排序（Gemini 周额度）；
-		// Codex depleted 已在 initialItems 处理，禁止再进 planFreshPositive。
-		if planItemProvider(item) != core.ProviderCodex && resetBoost(item, options) > 0 {
 			candidates = append(candidates, index)
 		}
 	}

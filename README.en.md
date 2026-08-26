@@ -1,6 +1,6 @@
 <div align="center">
 
-# Credential-Priority
+# Quota Pacer
 
 [中文](./README.md) | [English](./README.en.md)
 
@@ -8,7 +8,7 @@
 
 > **This project has moved to [xg1990/quota-pacer](https://github.com/xg1990/quota-pacer).** This repository is archived and no longer updated; please use the new repository for the latest version and plugin store source.
 
-Credential Priority is a CLIProxyAPI (CPA) plugin that automatically adjusts credential priority. The plugin ID, dynamic library basename, and CPA configuration key are all `credential-priority`.
+Quota Pacer (formerly quota-pacer) is a CLIProxyAPI (CPA) plugin that automatically paces credential priority by fresh quota evidence. The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
 
 ## Navigation
 
@@ -27,14 +27,14 @@ Credential Priority is a CLIProxyAPI (CPA) plugin that automatically adjusts cre
 - Currently supports Antigravity, Codex, and xAI credentials; additional providers may be added later.
 - Provider rules are independent: Antigravity, Codex, and xAI do not share depletion behavior.
 - Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
-- **Automatic priority and rules** are edited via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.credential-priority`.
+- **Automatic priority and rules** are edited via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.quota-pacer`.
 - **Plugin page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual apply (management routes). **It does not save config on the plugin page.**
 
 ## Workflow
 
 ```text
 Load plugin
-  -> Read plugins.configs.credential-priority config
+  -> Read plugins.configs.quota-pacer config
   -> Fetch CPA credential list through host.auth.list
   -> Filter currently supported providers by provider_scope (all or antigravity|codex|claude|xai)
        - Antigravity: probe remaining quota for the selected model group
@@ -52,17 +52,17 @@ Load plugin
 
 ## Build and Installation
 
-The plugin runs as a CGO dynamic library. CPA derives the plugin ID from the dynamic library filename, so the filename must stay `credential-priority.<ext>`.
+The plugin runs as a CGO dynamic library. CPA derives the plugin ID from the dynamic library filename, so the filename must stay `quota-pacer.<ext>`.
 
 ```bash
-go build -buildmode=c-shared -o credential-priority.so .
+go build -buildmode=c-shared -o quota-pacer.so .
 ```
 
 Place the artifact in one of the CPA plugin discovery directories:
 
-- `plugins/<GOOS>/<GOARCH>/credential-priority.<ext>`
-- `plugins/<GOOS>/<GOARCH>-<variant>/credential-priority.<ext>`
-- `plugins/credential-priority.<ext>`
+- `plugins/<GOOS>/<GOARCH>/quota-pacer.<ext>`
+- `plugins/<GOOS>/<GOARCH>-<variant>/quota-pacer.<ext>`
+- `plugins/quota-pacer.<ext>`
 
 Extensions: `.so` on Linux and FreeBSD, `.dylib` on macOS, and `.dll` on Windows.
 
@@ -74,21 +74,21 @@ To install this plugin through the CPA plugin store, third-party sources must po
 plugins:
   enabled: true
   store-sources:
-    - "https://raw.githubusercontent.com/Cody292/credential-priority/main/registry.json"
+    - "https://raw.githubusercontent.com/xg1990/quota-pacer/main/registry.json"
 ```
 
-Do not use `https://github.com/Cody292/credential-priority/blob/main/registry.json`. That URL returns a GitHub HTML page, which CPA cannot parse as a plugin store registry. After changing `store-sources`, restart CPA or reload configuration through the management UI, then refresh the plugin store list.
+Do not use `https://github.com/xg1990/quota-pacer/blob/main/registry.json`. That URL returns a GitHub HTML page, which CPA cannot parse as a plugin store registry. After changing `store-sources`, restart CPA or reload configuration through the management UI, then refresh the plugin store list.
 
 ## Configuration
 
-Enable the CPA plugin system and keep plugin-owned fields under `plugins.configs.credential-priority`:
+Enable the CPA plugin system and keep plugin-owned fields under `plugins.configs.quota-pacer`:
 
 ```yaml
 plugins:
   enabled: true
   dir: "plugins"
   configs:
-    credential-priority:
+    quota-pacer:
       enabled: true
       priority: 10
       auto_apply: false
@@ -144,7 +144,6 @@ Claude rules
 - `priority_rules.claude.free_depleted_priority`: priority for depleted Free credentials. Default: `-1`.
 - `priority_rules.claude.free_depleted_disabled`: disables depleted Free credentials. Default: `true`.
 - `priority_rules.claude.paid_depleted_disabled`: disable Pro/Team when depleted; `true`=disable, `false`=keep enabled. Default: `false`.
-- Accounts within ~24h of their 5-hour window reset receive a priority 999 boost.
 
 xAI rules
 
@@ -185,26 +184,26 @@ The plugin registers **resources** (static shell) and **routes** (dynamic APIs) 
 | Capability | Entry | Notes |
 | :--- | :--- | :--- |
 | Automatic priority and rules | CPA Plugin Manager visual fields (recommended) or `config.yaml` | `auto_apply`, `provider_scope` (all or a\|b\|c), `interval`, `priority_rules.*`, etc. |
-| Resource page | `/v0/resource/plugins/credential-priority/status` | Static HTML: key verify + overview / run history / help + manual sort |
-| Manual apply | `/v0/management/plugins/credential-priority/run` | Requires Management Key |
-| Read-only config | Host `GET /v0/management/plugins/credential-priority/config` | Display only; no plugin-page PATCH |
+| Resource page | `/v0/resource/plugins/quota-pacer/status` | Static HTML: key verify + overview / run history / help + manual sort |
+| Manual apply | `/v0/management/plugins/quota-pacer/run` | Requires Management Key |
+| Read-only config | Host `GET /v0/management/plugins/quota-pacer/config` | Display only; no plugin-page PATCH |
 
 ### Resource page (static)
 
-- `GET /v0/resource/plugins/credential-priority/status`
+- `GET /v0/resource/plugins/quota-pacer/status`
   Returns a static HTML shell. The browser uses the Management Key for read-only data, run history, and management-path manual runs. **No in-page config save controls.**
 
 ### Management API (dynamic, key required)
 
-- `POST /v0/management/plugins/credential-priority/run?mode=apply&provider_scope=all&antigravity_model_group=gemini`
+- `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider_scope=all&antigravity_model_group=gemini`
   Manual probe, plan, and write-back of credential priorities.
-- `POST /v0/management/plugins/credential-priority/run?mode=apply&provider=antigravity&antigravity_model_group=claude_gpt`
+- `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider=antigravity&antigravity_model_group=claude_gpt`
   Handles only Antigravity credentials with the Claude/GPT model group.
-- `POST /v0/management/plugins/credential-priority/run?mode=apply&provider=codex`
+- `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider=codex`
   Handles only Codex credentials.
-- `GET /v0/management/plugins/credential-priority/diagnostics`
+- `GET /v0/management/plugins/quota-pacer/diagnostics`
   Exports redacted diagnostics.
-- `GET /v0/management/plugins/credential-priority/snapshot/latest`
+- `GET /v0/management/plugins/quota-pacer/snapshot/latest`
   Returns the latest redacted decision snapshot.
 
 ## License

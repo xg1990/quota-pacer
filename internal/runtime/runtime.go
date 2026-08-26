@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"credential-priority/internal/apply"
-	"credential-priority/internal/config"
-	"credential-priority/internal/host"
-	"credential-priority/internal/management"
+	"quota-pacer/internal/apply"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/host"
+	"quota-pacer/internal/management"
 )
 
 const maxRunHistory = 5
@@ -173,10 +173,10 @@ func registrationResult() RegisterResult {
 		SchemaVersion: 1,
 		Metadata: Metadata{
 			Name:             config.PluginID,
-			Version:          "1.3.8",
+			Version:          "1.0.0",
 			Author:           "CPA Plugins",
-			GitHubRepository: "https://github.com/xg1990/credential-priority",
-			Description:      "Fresh evidence based credential priority management API.",
+			GitHubRepository: "https://github.com/xg1990/quota-pacer",
+			Description:      "Fresh evidence based credential quota-pacing management API.",
 			ConfigFields:     configFields(),
 		},
 		Capabilities: map[string]bool{

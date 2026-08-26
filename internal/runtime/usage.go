@@ -6,10 +6,10 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/config"
-	"credential-priority/internal/core"
-	"credential-priority/internal/provider/xai"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/provider/xai"
+	"quota-pacer/internal/state"
 )
 
 // usageRecord is the boundary parse of host usage.handle UsageRecord.

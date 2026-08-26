@@ -3,7 +3,7 @@ package provider
 import (
 	"strings"
 
-	"credential-priority/internal/core"
+	"quota-pacer/internal/core"
 )
 
 // Result 是 registry 对单个凭证选择 provider 策略后的安全判定。

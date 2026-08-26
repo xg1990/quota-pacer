@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/host"
+	"quota-pacer/internal/host"
 )
 
 func firstStringField(object map[string]json.RawMessage, keys ...string) string {

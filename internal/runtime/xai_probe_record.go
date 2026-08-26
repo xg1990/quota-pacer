@@ -4,10 +4,10 @@ import (
 	"context"
 	"time"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/priority"
-	"credential-priority/internal/provider/xai"
-	"credential-priority/internal/state"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/priority"
+	"quota-pacer/internal/provider/xai"
+	"quota-pacer/internal/state"
 )
 
 // xAI plan re-fetch interval; free cooldown aligns NextEligibleAt.

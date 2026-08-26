@@ -11,13 +11,13 @@ import (
 
 const (
 	// PluginID 是 CPA 宿主识别该插件的固定 ID。
-	PluginID = "credential-priority"
+	PluginID = "quota-pacer"
 	// DirectoryName 是源码目录和插件目录约定名。
-	DirectoryName = "credential-priority"
+	DirectoryName = "quota-pacer"
 	// DynamicLibraryBaseName 是构建动态库时不含平台扩展名的文件名。
-	DynamicLibraryBaseName = "credential-priority"
+	DynamicLibraryBaseName = "quota-pacer"
 	// CPAConfigKey 是 `plugins.configs` 下该插件的配置键。
-	CPAConfigKey = "credential-priority"
+	CPAConfigKey = "quota-pacer"
 	// DefaultStateCachePath 是探测状态缓存落盘路径（包内常量，不可配置）。
 	DefaultStateCachePath = DirectoryName + "/refresh-cache.json"
 )

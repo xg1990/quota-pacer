@@ -175,7 +175,7 @@ type HostCallbacks interface {
 	HTTPDo(ctx context.Context, req HTTPRequest) (HTTPResponse, error)
 }
 
-// API 是后续 credential-priority 包依赖的稳定宿主适配接口。
+// API 是后续 quota-pacer 包依赖的稳定宿主适配接口。
 type API interface {
 	ListAuthFiles(ctx context.Context) ([]AuthFile, error)
 	GetAuth(ctx context.Context, authIndex string) (AuthDocument, error)

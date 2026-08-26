@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"credential-priority/internal/config"
+	"quota-pacer/internal/config"
 )
 
 // Envelope 是 CPA C ABI 使用的 JSON 信封。

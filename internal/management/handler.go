@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"credential-priority/internal/apply"
-	"credential-priority/internal/config"
-	"credential-priority/internal/host"
+	"quota-pacer/internal/apply"
+	"quota-pacer/internal/config"
+	"quota-pacer/internal/host"
 )
 
 // StatusInfo 表示用于渲染 HTML 页面和 JSON API 的状态摘要。
@@ -58,7 +58,7 @@ func NewHandler(runner Runner) *Handler {
 }
 
 // routeSourceHeader 与 runtime 层约定一致：resource 仅静态壳，management 才跑动态业务。
-const routeSourceHeader = "X-Credential-Priority-Route-Source"
+const routeSourceHeader = "X-Quota-Pacer-Route-Source"
 
 // ServeHTTP 实现 http.Handler 接口。
 // resource 前缀：仅 GET /status 静态 HTML。
@@ -99,7 +99,7 @@ func (h *Handler) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		payload = []byte("null")
 	}
-	html := strings.Replace(StatusHTML, "__CREDENTIAL_PRIORITY_BOOTSTRAP_JSON__", string(payload), 1)
+	html := strings.Replace(StatusHTML, "__QUOTA_PACER_BOOTSTRAP_JSON__", string(payload), 1)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write([]byte(html)); err != nil {

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"credential-priority/internal/core"
-	"credential-priority/internal/host"
+	"quota-pacer/internal/core"
+	"quota-pacer/internal/host"
 )
 
 type httpDoer interface {
