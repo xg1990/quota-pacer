@@ -6,9 +6,7 @@
 
 </div>
 
-> **本项目已迁移至 [xg1990/quota-pacer](https://github.com/xg1990/quota-pacer)。** 此仓库已归档，不再更新，请前往新仓库获取最新版本与插件商店地址。
-
-CLIProxyAPI (CPA) 额度节奏（Pacing）自动调整插件，前身为 quota-pacer。插件 ID、动态库基础名与 CPA 配置键均为 `quota-pacer`。
+CLIProxyAPI (CPA) 额度节奏（Pacing）自动调整插件，前身为 credential-priority。插件 ID、动态库基础名与 CPA 配置键均为 `quota-pacer`。
 
 <div align="center">
   <img src="./picture/密钥验证页.png" alt="密钥验证页" width="32%" />
@@ -20,10 +18,12 @@ CLIProxyAPI (CPA) 额度节奏（Pacing）自动调整插件，前身为 quota-p
 
 - [功能概览](#功能概览)
 - [工作流程](#工作流程)
+- [PacingScore 算法](#pacingscore-算法)
 - [构建与安装](#构建与安装)
 - [插件商店来源](#插件商店来源)
 - [配置说明](#配置说明)
 - [管理页面与接口](#管理页面与接口)
+- [致谢](#致谢)
 - [许可证](#许可证)
 
 ## 功能概览
@@ -55,6 +55,22 @@ CLIProxyAPI (CPA) 额度节奏（Pacing）自动调整插件，前身为 quota-p
        - preview：仅更新状态、诊断、快照与日志
   -> 在管理页面展示脱敏后的统计、审计摘要与排序结果
 ```
+
+## PacingScore 算法
+
+排序不再依赖固定阈值或提权规则，核心是一个无量纲的节奏健康度评分，用于在所有提供商、所有账号之间做统一的全局比较：
+
+```
+PacingScore = 剩余额度百分比 ÷ 剩余时间百分比
+```
+
+- **剩余额度百分比**：本轮探测得到的 `Remaining`（0-100）。探测失败或额度为 0 时得分直接为 0，账号自动沉底，不需要额外的"耗尽"判断分支。
+- **剩余时间百分比**：距离配额重置的剩余时间 ÷ 所属周期总长度，裁剪到 `[0.001, 1.0]`（重置时间已过但证据未刷新时同样取下限，得分被放大）。周期总长度的判定：
+  - 探测到长周期重置时间（如 OAuth 周长窗 `LongWindowResetAt`）时固定为 7 天；
+  - 否则按短周期重置时间（`ResetAt`）距今的剩余时长动态归类：> 48 小时按 7 天算，6-48 小时按 24 小时算，< 6 小时按 5 小时算（对应 Claude / Codex 常见的会话级窗口）；
+  - 完全没有重置时间证据时，退化为只用剩余额度百分比排序。
+
+得分越高，说明这个账号"额度消耗进度落后于时间流逝进度"（用得比预期慢），应优先分配流量去消耗；得分 < 1 则说明消耗过快，应压低优先级。因为是两个百分比的比值，不同提供商即使配额语义完全不同（Antigravity 的模型组配额、Codex/Claude 的套餐窗口、xAI 的周/月限额），也能直接放在同一条全局优先级队列里比较，无需为每个提供商单独设计打分标准。
 
 ## 构建与安装
 
@@ -213,6 +229,11 @@ xAI 规则
   导出脱敏诊断信息。
 - `GET /v0/management/plugins/quota-pacer/snapshot/latest`
   获取最近一次运行的脱敏决策快照。
+
+## 致谢
+
+- 本项目最初 fork 自 [Cody292/credential-priority](https://github.com/Cody292/credential-priority)，感谢原作者搭建的插件骨架与提供商探测逻辑。
+- 感谢 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 提供的插件宿主平台（`host.auth.*` 回调、Management Key 校验、热加载等能力），使本插件可以专注于节奏调度算法本身。
 
 ## 许可证
 

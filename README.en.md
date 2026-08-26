@@ -6,18 +6,18 @@
 
 </div>
 
-> **This project has moved to [xg1990/quota-pacer](https://github.com/xg1990/quota-pacer).** This repository is archived and no longer updated; please use the new repository for the latest version and plugin store source.
-
-Quota Pacer (formerly quota-pacer) is a CLIProxyAPI (CPA) plugin that automatically paces credential priority by fresh quota evidence. The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
+Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that automatically paces credential priority by fresh quota evidence. The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
 
 ## Navigation
 
 - [Overview](#overview)
 - [Workflow](#workflow)
+- [PacingScore Algorithm](#pacingscore-algorithm)
 - [Build and Installation](#build-and-installation)
 - [Plugin Store Source](#plugin-store-source)
 - [Configuration](#configuration)
 - [Management Page and API](#management-page-and-api)
+- [Acknowledgments](#acknowledgments)
 - [License](#license)
 
 ## Overview
@@ -49,6 +49,22 @@ Load plugin
        - preview: update status, diagnostics, snapshot, and logs only
   -> Show redacted statistics, audit summary, and sorting result on the management page
 ```
+
+## PacingScore Algorithm
+
+Sorting no longer relies on fixed thresholds or boost rules. The core is a dimensionless pacing-health score used to compare every account, across every provider, on one global scale:
+
+```
+PacingScore = Remaining Quota % ÷ Remaining Time %
+```
+
+- **Remaining Quota %**: the `Remaining` value (0-100) probed in this run. A failed probe or zero remaining quota scores 0 directly, so the account automatically sinks to the bottom — no separate "depleted" branch needed.
+- **Remaining Time %**: time left until quota reset ÷ the inferred window length, clamped to `[0.001, 1.0]` (a reset time that has already passed but hasn't refreshed yet also hits the floor, amplifying the score). The window length is inferred as follows:
+  - If a long-window reset time is probed (e.g. an OAuth weekly window, `LongWindowResetAt`), the window is fixed at 7 days.
+  - Otherwise it falls back to the short-window reset time (`ResetAt`) and infers the window from how much time remains: > 48h → 7-day window, 6-48h → 24-hour window, < 6h → 5-hour window (matching the session-level windows common to Claude/Codex).
+  - With no reset-time evidence at all, it falls back to sorting by remaining quota % alone.
+
+A higher score means the account's quota consumption is lagging behind time elapsed (it's being used more slowly than expected), so it should get more traffic; a score below 1 means it's burning too fast and should be throttled back. Because it's a ratio of two percentages, accounts can be compared on one global priority queue even when quota semantics differ completely across providers (Antigravity's model-group quota, Codex/Claude's plan windows, xAI's weekly/monthly caps) — no per-provider scoring rule required.
 
 ## Build and Installation
 
@@ -205,6 +221,11 @@ The plugin registers **resources** (static shell) and **routes** (dynamic APIs) 
   Exports redacted diagnostics.
 - `GET /v0/management/plugins/quota-pacer/snapshot/latest`
   Returns the latest redacted decision snapshot.
+
+## Acknowledgments
+
+- This project was originally forked from [Cody292/credential-priority](https://github.com/Cody292/credential-priority) — thanks to the original author for the plugin scaffold and provider-probing logic.
+- Thanks to [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) for the host plugin platform (`host.auth.*` callbacks, Management Key verification, hot-reload, and more), which let this plugin focus purely on the pacing algorithm.
 
 ## License
 
