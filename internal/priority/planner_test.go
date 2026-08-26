@@ -409,3 +409,70 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 		t.Errorf("expected auth-fast priority 98, got %d", p)
 	}
 }
+
+func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	resetWeekly := now.Add(168 * time.Hour)
+	resetPlus := now.Add(139 * time.Hour)
+
+	rem100 := int64(100)
+	rem33 := int64(33)
+
+	credentials := []core.Credential{
+		{Name: "antigravity-free", AuthIndex: "auth-ag-free", Provider: core.ProviderAntigravity, Type: core.CredentialTypeAntigravity},
+		{Name: "codex-plus", AuthIndex: "auth-codex-plus", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:          core.ProviderAntigravity,
+			AuthIndex:         "auth-ag-free",
+			ObservedAt:        now,
+			ResetAt:           &resetWeekly,
+			LongWindowResetAt: &resetWeekly,
+			Remaining:         &rem100,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypeFree,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderCodex,
+			AuthIndex:         "auth-codex-plus",
+			ObservedAt:        now,
+			ResetAt:           &resetPlus,
+			LongWindowResetAt: &resetPlus,
+			Remaining:         &rem33,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePlus,
+			EvidenceFresh:     true,
+		},
+	}
+
+	options := Options{
+		Now:         now,
+		MaxPriority: 100,
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, options)
+	if len(plan.Items) != 2 {
+		t.Fatalf("expected 2 plan items, got %d", len(plan.Items))
+	}
+
+	priorityByAuth := make(map[string]int)
+	for _, item := range plan.Items {
+		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+	}
+
+	// 移除 paid-first 规则后，纯按 PacingScore 排序：
+	// auth-ag-free (score = 1.000 / 1.000 = 1.0) 应排在 auth-codex-plus (score = 0.33 / (139/168) ≈ 0.399) 前面
+	if p := priorityByAuth["auth-ag-free"]; p != 100 {
+		t.Errorf("expected antigravity-free priority 100, got %d", p)
+	}
+	if p := priorityByAuth["auth-codex-plus"]; p != 99 {
+		t.Errorf("expected codex-plus priority 99, got %d", p)
+	}
+}

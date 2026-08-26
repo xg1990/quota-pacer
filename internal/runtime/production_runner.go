@@ -518,7 +518,7 @@ func scheduleOptions(cfg config.Config, now time.Time) schedule.Options {
 }
 
 func priorityOptions(cfg config.Config, now time.Time) priority.Options {
-	options := priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange, PaidFirst: true}
+	options := priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange}
 	if cfg.PriorityRules.Enabled {
 		freeDepletedPriority := cfg.PriorityRules.Codex.FreeDepletedPriority
 		freeDepletedDisabled := cfg.PriorityRules.Codex.FreeDepletedDisabled

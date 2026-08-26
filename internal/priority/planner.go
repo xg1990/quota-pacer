@@ -28,7 +28,6 @@ type Options struct {
 	XAIMonthlyAndWeeklyDepletedPriority *int
 	XAIMonthlyAndWeeklyDepletedDisabled *bool
 	MinChange                           int
-	PaidFirst                           bool
 }
 
 // ProbeEvidence 是本轮 probe 产出的排序证据；EvidenceFresh=false 时不得驱动变更。
@@ -626,33 +625,6 @@ func positiveCandidates(items []PlanItem, options Options) []int {
 }
 
 func compareCandidates(left PlanItem, right PlanItem, options Options) int {
-	// xAI: free eligible ranks above paid; then pacing score, remaining, reset, AuthIndex.
-	if planItemProvider(left) == core.ProviderXAI || planItemProvider(right) == core.ProviderXAI {
-		leftFree := isXAIFreeEligibleItem(left, options)
-		rightFree := isXAIFreeEligibleItem(right, options)
-		switch {
-		case leftFree && !rightFree:
-			return -1
-		case rightFree && !leftFree:
-			return 1
-		}
-		if scoreCmp := comparePacingScores(pacingScore(left, options.Now), pacingScore(right, options.Now)); scoreCmp != 0 {
-			return scoreCmp
-		}
-		if left.Remaining != nil && right.Remaining != nil && *left.Remaining != *right.Remaining {
-			if *left.Remaining > *right.Remaining {
-				return -1
-			}
-			return 1
-		}
-		if result := compareResetAt(left.ResetAt, right.ResetAt); result != 0 {
-			return result
-		}
-		return cmp.Compare(left.Credential.AuthIndex, right.Credential.AuthIndex)
-	}
-	if options.PaidFirst && paidRank(left.PlanType) != paidRank(right.PlanType) {
-		return paidRank(right.PlanType) - paidRank(left.PlanType)
-	}
 	// 基于 Pacing 健康度评分排序：优先消耗剩余额度比例落后于时间流逝比例的账号
 	if scoreCmp := comparePacingScores(pacingScore(left, options.Now), pacingScore(right, options.Now)); scoreCmp != 0 {
 		return scoreCmp
@@ -740,24 +712,6 @@ func paidRank(planType core.PlanType) int {
 	default:
 		return 0
 	}
-}
-
-// isXAIFreeEligibleItem: free plan with positive remaining (or unknown remaining) ranks high.
-// free_participates_priority=false 时永不视为 free-first 候选。
-func isXAIFreeEligibleItem(item PlanItem, options Options) bool {
-	if !xaiFreeParticipatesPriority(options) {
-		return false
-	}
-	if planItemProvider(item) != core.ProviderXAI {
-		return false
-	}
-	if item.PlanType != core.PlanTypeFree && item.PlanType != core.PlanTypeUnknown {
-		return false
-	}
-	if item.Remaining != nil && *item.Remaining <= 0 {
-		return false
-	}
-	return true
 }
 
 func compareResetAt(left *time.Time, right *time.Time) int {
