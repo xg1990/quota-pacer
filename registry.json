@@ -6,7 +6,7 @@
       "name": "Quota Pacer",
       "description": "Automatically paces Antigravity, Codex, Claude, and xAI credential priority by fresh quota evidence.",
       "author": "xg1990",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "repository": "https://github.com/xg1990/quota-pacer",
       "homepage": "https://github.com/xg1990/quota-pacer",
       "license": "MIT",
