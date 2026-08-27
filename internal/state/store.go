@@ -15,7 +15,10 @@ import (
 )
 
 // SchemaVersion 是当前缓存条目的结构版本。
-const SchemaVersion = 1
+// 每次给 Entry/ProbeSuccess 增补会影响打分的字段（如多窗口 Remaining）时必须递增此值，
+// 否则旧版本写入的缓存条目会被 NeedsProbe/ValidEntry 误判为“完整有效”而继续回放，
+// 导致 pacingScore 在缺失字段下静默退化为 legacy 单窗口口径。
+const SchemaVersion = 2
 
 // ErrCorruptCache 表示缓存文件不是可解析的状态文档。
 var ErrCorruptCache = errors.New("state: corrupt cache")

@@ -142,6 +142,59 @@ func TestStore_MultiWindowPersistence(t *testing.T) {
 	}
 }
 
+// TestStore_SchemaVersionMismatchForcesReprobe 回归覆盖：v1.0.5 曾在 Entry/ProbeSuccess 增补
+// 多窗口字段（ShortWindowRemaining/LongWindowRemaining）却未递增 SchemaVersion，导致升级前
+// 写入的旧缓存条目被当作“完整有效”继续回放，pacingScore 因缺字段静默退化为 legacy 单窗口口径，
+// 与后续基于 fresh evidence 冻结的 priority 产生视觉上的不一致。此测试确保版本不匹配的旧条目
+// 会被 NeedsProbe 判定为需要重新探测、被 ValidEntry 判定为无效（不会被当作缓存证据回放）。
+func TestStore_SchemaVersionMismatchForcesReprobe(t *testing.T) {
+	store, err := Load(context.Background(), "")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(2 * time.Hour)
+
+	success := ProbeSuccess{
+		AuthIndex:   "auth-legacy",
+		Provider:    core.ProviderCodex,
+		ObservedAt:  now,
+		ResetAt:     resetAt,
+		Remaining:   88,
+		Source:      SourceFreshProbe,
+		NextProbeAt: now.Add(time.Hour),
+	}
+	if err := store.MarkProbeSuccess(context.Background(), success); err != nil {
+		t.Fatalf("MarkProbeSuccess failed: %v", err)
+	}
+
+	// 模拟升级前写入的旧 schema 版本缓存条目（缺失本版本新增的多窗口字段）。
+	entry, ok := store.GetEntry("auth-legacy", "")
+	if !ok {
+		t.Fatalf("expected entry to exist")
+	}
+	entry.SchemaVersion = SchemaVersion - 1
+	store.entries[entryKey("auth-legacy", "")] = entry
+
+	if _, ok := store.ValidEntry("auth-legacy", "", now.Add(5*time.Minute), ProbePolicy{TTL: 15 * time.Minute}); ok {
+		t.Errorf("expected ValidEntry=false for stale schema version entry")
+	}
+
+	needs, err := store.NeedsProbe(context.Background(), ProbeCheck{
+		AuthIndex: "auth-legacy",
+		Provider:  core.ProviderCodex,
+		Now:       now.Add(5 * time.Minute),
+		Policy:    ProbePolicy{TTL: 15 * time.Minute},
+	})
+	if err != nil {
+		t.Fatalf("NeedsProbe error: %v", err)
+	}
+	if !needs {
+		t.Errorf("expected NeedsProbe=true for stale schema version entry")
+	}
+}
+
 func TestStore_ValidEntry(t *testing.T) {
 	store, err := Load(context.Background(), "")
 	if err != nil {
