@@ -156,3 +156,173 @@ func TestDueProbesAppliesProviderPolicyTTL(t *testing.T) {
 		t.Fatalf("dueProbes() = %d probes, want 1 (15m TTL must force re-probe even though NextProbeAt has not elapsed)", len(probes))
 	}
 }
+
+func TestAttachCachedEvidence(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reset5h := now.Add(4 * time.Hour)
+	reset7d := now.Add(6 * 24 * time.Hour)
+	shortRem := int64(88)
+	longRem := int64(95)
+
+	store, err := state.Load(ctx, filepath.Join(t.TempDir(), "cache.json"))
+	if err != nil {
+		t.Fatalf("state.Load() error = %v", err)
+	}
+
+	cred1 := core.Credential{AuthIndex: "auth-fresh", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex}
+	cred2 := core.Credential{AuthIndex: "auth-cached", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex, PlanType: core.PlanTypePlus}
+
+	// Seed store with cached valid entry for cred2
+	if err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:            cred2.AuthIndex,
+		Provider:             cred2.Provider,
+		ObservedAt:           now.Add(-5 * time.Minute),
+		ResetAt:              reset5h,
+		Remaining:            88,
+		Source:               state.SourceFreshProbe,
+		NextProbeAt:          now.Add(55 * time.Minute),
+		PlanType:             core.PlanTypePlus,
+		ShortWindowRemaining: &shortRem,
+		ShortWindowResetAt:   reset5h,
+		LongWindowRemaining:  &longRem,
+		LongWindowResetAt:    reset7d,
+	}); err != nil {
+		t.Fatalf("MarkProbeSuccess error: %v", err)
+	}
+
+	freshRem := int64(99)
+	existingEvidence := []priority.ProbeEvidence{
+		{
+			Provider:      core.ProviderCodex,
+			AuthIndex:     cred1.AuthIndex,
+			ObservedAt:    now,
+			ResetAt:       &reset5h,
+			Remaining:     &freshRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        priority.EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	merged := attachCachedEvidence([]core.Credential{cred1, cred2}, existingEvidence, store, "", now)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 evidences, got %d", len(merged))
+	}
+
+	// cred1 evidence is unchanged
+	if merged[0].AuthIndex != "auth-fresh" || !merged[0].EvidenceFresh {
+		t.Errorf("expected fresh evidence preserved, got %+v", merged[0])
+	}
+
+	// cred2 evidence is synthesized with EvidenceFresh=false
+	cached := merged[1]
+	if cached.AuthIndex != "auth-cached" {
+		t.Errorf("expected auth-cached, got %s", cached.AuthIndex)
+	}
+	if cached.EvidenceFresh {
+		t.Errorf("expected EvidenceFresh=false for synthesized cached evidence")
+	}
+	if cached.Remaining == nil || *cached.Remaining != 88 {
+		t.Errorf("expected Remaining=88, got %v", cached.Remaining)
+	}
+	if cached.ShortWindowRemaining == nil || *cached.ShortWindowRemaining != 88 {
+		t.Errorf("expected ShortWindowRemaining=88, got %v", cached.ShortWindowRemaining)
+	}
+	if cached.LongWindowRemaining == nil || *cached.LongWindowRemaining != 95 {
+		t.Errorf("expected LongWindowRemaining=95, got %v", cached.LongWindowRemaining)
+	}
+	if cached.PlanType != core.PlanTypePlus {
+		t.Errorf("expected PlanType plus, got %s", cached.PlanType)
+	}
+}
+
+func TestAttachCachedEvidence_SynthesizesFromStore(t *testing.T) {
+	ctx := context.Background()
+	store, err := state.Load(ctx, filepath.Join(t.TempDir(), "refresh-cache.json"))
+	if err != nil {
+		t.Fatalf("state.Load() error = %v", err)
+	}
+
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reset5h := now.Add(4 * time.Hour)
+	reset7d := now.Add(6 * 24 * time.Hour)
+	shortRem := int64(85)
+	longRem := int64(70)
+
+	// Populate cached entry for codex-1 in store
+	err = store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:            "codex-1",
+		Provider:             core.ProviderCodex,
+		ObservedAt:           now.Add(-5 * time.Minute),
+		ResetAt:              reset5h,
+		Remaining:            85,
+		Source:               state.SourceFreshProbe,
+		NextProbeAt:          now.Add(55 * time.Minute),
+		PlanType:             core.PlanTypePlus,
+		ShortWindowRemaining: &shortRem,
+		ShortWindowResetAt:   reset5h,
+		LongWindowRemaining:  &longRem,
+		LongWindowResetAt:    reset7d,
+	})
+	if err != nil {
+		t.Fatalf("MarkProbeSuccess error = %v", err)
+	}
+
+	credentials := []core.Credential{
+		{AuthIndex: "codex-1", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex, PlanType: core.PlanTypePlus},
+		{AuthIndex: "claude-2", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude, PlanType: core.PlanTypePro},
+	}
+
+	claudeRem := int64(95)
+	claudeReset := now.Add(2 * time.Hour)
+	freshEvidence := []priority.ProbeEvidence{
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "claude-2",
+			ObservedAt:    now,
+			ResetAt:       &claudeReset,
+			Remaining:     &claudeRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        priority.EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	merged := attachCachedEvidence(credentials, freshEvidence, store, config.AntigravityModelGroup(""), now)
+	if len(merged) != 2 {
+		t.Fatalf("expected 2 merged evidence items, got %d", len(merged))
+	}
+
+	var codexEv, claudeEv priority.ProbeEvidence
+	for _, ev := range merged {
+		if ev.AuthIndex == "codex-1" {
+			codexEv = ev
+		} else if ev.AuthIndex == "claude-2" {
+			claudeEv = ev
+		}
+	}
+
+	if !claudeEv.EvidenceFresh {
+		t.Errorf("expected claudeEv.EvidenceFresh=true")
+	}
+	if codexEv.EvidenceFresh {
+		t.Errorf("expected codexEv.EvidenceFresh=false")
+	}
+	if codexEv.Remaining == nil || *codexEv.Remaining != 85 {
+		t.Errorf("expected codexEv.Remaining=85, got %v", codexEv.Remaining)
+	}
+	if codexEv.ShortWindowRemaining == nil || *codexEv.ShortWindowRemaining != 85 {
+		t.Errorf("expected codexEv.ShortWindowRemaining=85, got %v", codexEv.ShortWindowRemaining)
+	}
+	if codexEv.LongWindowRemaining == nil || *codexEv.LongWindowRemaining != 70 {
+		t.Errorf("expected codexEv.LongWindowRemaining=70, got %v", codexEv.LongWindowRemaining)
+	}
+	if codexEv.PlanType != core.PlanTypePlus {
+		t.Errorf("expected codexEv.PlanType=plus, got %s", codexEv.PlanType)
+	}
+}

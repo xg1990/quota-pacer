@@ -746,3 +746,146 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_PrimaryDepletedStillZero(t *testi
 		t.Errorf("expected pacing score 0 for depleted primary window, got %.6f", got)
 	}
 }
+
+func TestPlanFreshOnly_CachedEvidencePopulatesPacingScoreAndZeroChanges(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	shortReset := now.Add(4 * time.Hour)
+	longReset := now.Add(5 * 24 * time.Hour)
+	rem := int64(80)
+	shortRem := int64(80)
+	longRem := int64(90)
+
+	credentials := []core.Credential{
+		{
+			Name:      "codex-cached",
+			AuthIndex: "auth-cached-1",
+			Provider:  core.ProviderCodex,
+			Type:      core.CredentialTypeCodex,
+			Priority:  42,
+			Disabled:  false,
+			PlanType:  core.PlanTypePlus,
+		},
+	}
+	cachedEvidence := []ProbeEvidence{
+		{
+			Provider:             core.ProviderCodex,
+			AuthIndex:            "auth-cached-1",
+			ObservedAt:           now.Add(-10 * time.Minute),
+			ResetAt:              &shortReset,
+			Remaining:            &rem,
+			ShortWindowRemaining: &shortRem,
+			ShortWindowResetAt:   &shortReset,
+			LongWindowRemaining:  &longRem,
+			LongWindowResetAt:    &longReset,
+			Freshness:            core.FreshnessStale,
+			ProbeStatus:          core.ProbeStatusReady,
+			Status:               EvidenceStatusReady,
+			PlanType:             core.PlanTypePlus,
+			EvidenceFresh:        false,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, cachedEvidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(plan.Items))
+	}
+	item := plan.Items[0]
+	if item.EvidenceFresh {
+		t.Errorf("expected EvidenceFresh=false for cached item")
+	}
+	if item.Remaining == nil || *item.Remaining != 80 {
+		t.Errorf("expected Remaining=80, got %v", item.Remaining)
+	}
+	if item.ShortWindowRemaining == nil || *item.ShortWindowRemaining != 80 {
+		t.Errorf("expected ShortWindowRemaining=80, got %v", item.ShortWindowRemaining)
+	}
+	if item.LongWindowRemaining == nil || *item.LongWindowRemaining != 90 {
+		t.Errorf("expected LongWindowRemaining=90, got %v", item.LongWindowRemaining)
+	}
+	if item.PlanType != core.PlanTypePlus {
+		t.Errorf("expected PlanType plus, got %s", item.PlanType)
+	}
+	if item.PacingScore <= 0 {
+		t.Errorf("expected PacingScore > 0, got %.6f", item.PacingScore)
+	}
+	if item.Priority != 42 {
+		t.Errorf("expected Priority preserved at 42, got %d", item.Priority)
+	}
+	if item.Disabled {
+		t.Errorf("expected Disabled preserved as false")
+	}
+	if len(plan.Changes) != 0 {
+		t.Errorf("expected 0 changes for cached evidence, got %d changes: %+v", len(plan.Changes), plan.Changes)
+	}
+}
+
+func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	reset := now.Add(3 * time.Hour)
+	freshRem := int64(95)
+	cachedRem := int64(70)
+
+	credentials := []core.Credential{
+		{Name: "c-fresh", AuthIndex: "auth-fresh", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex, Priority: 10, Disabled: false},
+		{Name: "c-cached", AuthIndex: "auth-cached", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex, Priority: 50, Disabled: false},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderCodex,
+			AuthIndex:     "auth-fresh",
+			ObservedAt:    now,
+			ResetAt:       &reset,
+			Remaining:     &freshRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+		{
+			Provider:      core.ProviderCodex,
+			AuthIndex:     "auth-cached",
+			ObservedAt:    now.Add(-5 * time.Minute),
+			ResetAt:       &reset,
+			Remaining:     &cachedRem,
+			Freshness:     core.FreshnessStale,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePlus,
+			EvidenceFresh: false,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(plan.Items))
+	}
+
+	// Changes should ONLY contain the fresh item
+	if len(plan.Changes) != 1 {
+		t.Fatalf("expected exactly 1 change for fresh item, got %d: %+v", len(plan.Changes), plan.Changes)
+	}
+	if plan.Changes[0].Credential.AuthIndex != "auth-fresh" {
+		t.Errorf("expected change on auth-fresh, got %s", plan.Changes[0].Credential.AuthIndex)
+	}
+	if plan.Changes[0].Priority != 100 {
+		t.Errorf("expected fresh item assigned top priority 100, got %d", plan.Changes[0].Priority)
+	}
+
+	// Cached item retains priority 50
+	var cachedItem *PlanItem
+	for i := range plan.Items {
+		if plan.Items[i].Credential.AuthIndex == "auth-cached" {
+			cachedItem = &plan.Items[i]
+		}
+	}
+	if cachedItem == nil {
+		t.Fatalf("cached item not found in items")
+	}
+	if cachedItem.Priority != 50 {
+		t.Errorf("expected cached item to keep priority 50, got %d", cachedItem.Priority)
+	}
+	if cachedItem.PacingScore <= 0 {
+		t.Errorf("expected cached item to have valid PacingScore > 0, got %.6f", cachedItem.PacingScore)
+	}
+}

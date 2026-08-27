@@ -157,6 +157,7 @@ func writeXAIPolicyWithLongWindow(ctx context.Context, store *state.Store, authI
 		Source:             source,
 		NextProbeAt:        nextProbeAt,
 		AuthInvalid:        false,
+		PlanType:           xaiPlanTypeFromClass(snap.PlanClass),
 		PlanClass:          snap.PlanClass,
 		QuotaFailCount:     snap.QuotaFailCount,
 		FirstSuccessAt:     snap.FirstSuccessAt,

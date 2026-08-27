@@ -103,9 +103,11 @@ type Plan struct {
 }
 
 // PlanFreshOnly 只使用本轮 fresh probe evidence 生成优先级和禁用变更。
+// 若某些凭证仅有缓存证据（EvidenceFresh=false），则仅填充剩余量与配额窗口供打分和审计展示，不产生写入变更。
 func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, options Options) Plan {
-	evidenceByAuthIndex := freshEvidenceByAuthIndex(evidence)
-	items := initialItems(credentials, evidenceByAuthIndex)
+	freshByAuth := freshEvidenceByAuthIndex(evidence)
+	cachedByAuth := cachedEvidenceByAuthIndex(evidence)
+	items := initialItems(credentials, freshByAuth, cachedByAuth)
 	planFreshPositive(items, options)
 	// 跨账号全局优先级去重：保证全量启用态正优先级槽位唯一，且直接反映全局 Pacing 排序
 	ensureUniquePriorities(items, options)
@@ -126,6 +128,16 @@ func freshEvidenceByAuthIndex(evidence []ProbeEvidence) map[string]ProbeEvidence
 	return byAuthIndex
 }
 
+func cachedEvidenceByAuthIndex(evidence []ProbeEvidence) map[string]ProbeEvidence {
+	byAuthIndex := make(map[string]ProbeEvidence, len(evidence))
+	for _, item := range evidence {
+		if !item.EvidenceFresh && item.Remaining != nil {
+			byAuthIndex[item.AuthIndex] = item
+		}
+	}
+	return byAuthIndex
+}
+
 func isFreshReadyEvidence(evidence ProbeEvidence) bool {
 	return evidence.EvidenceFresh &&
 		evidence.Freshness == core.FreshnessFresh &&
@@ -133,7 +145,7 @@ func isFreshReadyEvidence(evidence ProbeEvidence) bool {
 		(evidence.Status == EvidenceStatusReady || evidence.Status == EvidenceStatusAuthInvalid)
 }
 
-func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]ProbeEvidence) []PlanItem {
+func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvidence, cachedByAuth map[string]ProbeEvidence) []PlanItem {
 	items := make([]PlanItem, len(credentials))
 	for index, credential := range credentials {
 		item := PlanItem{
@@ -143,25 +155,35 @@ func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]
 			PlanType:   credential.PlanType,
 			Reason:     "keep current state",
 		}
-		evidence, ok := evidenceByAuthIndex[credential.AuthIndex]
-		if ok {
-			item.PlanType = evidence.PlanType
-			item.ResetAt = evidence.ResetAt
-			item.Remaining = evidence.Remaining
-			item.LongWindowResetAt = evidence.LongWindowResetAt
-			item.ShortWindowRemaining = evidence.ShortWindowRemaining
-			item.ShortWindowResetAt = evidence.ShortWindowResetAt
-			item.LongWindowRemaining = evidence.LongWindowRemaining
+		if fresh, ok := freshByAuth[credential.AuthIndex]; ok {
+			item.PlanType = fresh.PlanType
+			item.ResetAt = fresh.ResetAt
+			item.Remaining = fresh.Remaining
+			item.LongWindowResetAt = fresh.LongWindowResetAt
+			item.ShortWindowRemaining = fresh.ShortWindowRemaining
+			item.ShortWindowResetAt = fresh.ShortWindowResetAt
+			item.LongWindowRemaining = fresh.LongWindowRemaining
 			item.EvidenceFresh = true
 
-			if isXAIAuthInvalid(credential, evidence) {
+			if isXAIAuthInvalid(credential, fresh) {
 				item.Priority = -1
 				item.Disabled = true
 				item.Reason = "xai auth invalid"
-			} else if evidence.Remaining != nil && *evidence.Remaining <= 0 {
+			} else if fresh.Remaining != nil && *fresh.Remaining <= 0 {
 				item.Priority = 0
 				item.Reason = "fresh remaining depleted"
 			}
+		} else if cached, ok := cachedByAuth[credential.AuthIndex]; ok {
+			if cached.PlanType != core.PlanTypeUnknown && cached.PlanType != "" {
+				item.PlanType = cached.PlanType
+			}
+			item.ResetAt = cached.ResetAt
+			item.Remaining = cached.Remaining
+			item.LongWindowResetAt = cached.LongWindowResetAt
+			item.ShortWindowRemaining = cached.ShortWindowRemaining
+			item.ShortWindowResetAt = cached.ShortWindowResetAt
+			item.LongWindowRemaining = cached.LongWindowRemaining
+			item.EvidenceFresh = false
 		}
 		items[index] = item
 	}

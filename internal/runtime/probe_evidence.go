@@ -337,7 +337,20 @@ func recordCodexProbeResult(ctx context.Context, store *state.Store, result code
 		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
 		return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
-	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: result.ObservedAt, ResetAt: *result.ResetAt, Remaining: int(*result.Remaining), Source: state.SourceFreshProbe, NextProbeAt: result.ObservedAt.Add(time.Hour), LongWindowResetAt: derefTimeOrZero(result.LongWindowResetAt)})
+	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:            result.AuthIndex,
+		Provider:             result.Provider,
+		ObservedAt:           result.ObservedAt,
+		ResetAt:              *result.ResetAt,
+		Remaining:            int(*result.Remaining),
+		Source:               state.SourceFreshProbe,
+		NextProbeAt:          result.ObservedAt.Add(time.Hour),
+		LongWindowResetAt:    derefTimeOrZero(result.LongWindowResetAt),
+		PlanType:             result.PlanType,
+		ShortWindowRemaining: result.ShortWindowRemaining,
+		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
+		LongWindowRemaining:  result.LongWindowRemaining,
+	})
 	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 
@@ -346,7 +359,21 @@ func recordAntigravityProbeResult(ctx context.Context, store *state.Store, resul
 		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: core.ProviderAntigravity, ModelGroup: string(result.ModelGroup), ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
 		return priority.ProbeEvidence{Provider: core.ProviderAntigravity, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
-	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{AuthIndex: result.AuthIndex, Provider: core.ProviderAntigravity, ModelGroup: string(result.ModelGroup), ObservedAt: result.ObservedAt, ResetAt: *result.ResetAt, Remaining: int(*result.Remaining), Source: state.SourceFreshProbe, NextProbeAt: result.ObservedAt.Add(time.Hour), LongWindowResetAt: derefTimeOrZero(result.LongWindowResetAt)})
+	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:            result.AuthIndex,
+		Provider:             core.ProviderAntigravity,
+		ModelGroup:           string(result.ModelGroup),
+		ObservedAt:           result.ObservedAt,
+		ResetAt:              *result.ResetAt,
+		Remaining:            int(*result.Remaining),
+		Source:               state.SourceFreshProbe,
+		NextProbeAt:          result.ObservedAt.Add(time.Hour),
+		LongWindowResetAt:    derefTimeOrZero(result.LongWindowResetAt),
+		PlanType:             result.PlanType,
+		ShortWindowRemaining: result.ShortWindowRemaining,
+		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
+		LongWindowRemaining:  result.LongWindowRemaining,
+	})
 	return priority.ProbeEvidence{Provider: core.ProviderAntigravity, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 
@@ -355,7 +382,20 @@ func recordClaudeProbeResult(ctx context.Context, store *state.Store, result cla
 		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
 		return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
-	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: result.ObservedAt, ResetAt: *result.ResetAt, Remaining: int(*result.Remaining), Source: state.SourceFreshProbe, NextProbeAt: result.ObservedAt.Add(time.Hour), LongWindowResetAt: derefTimeOrZero(result.LongWindowResetAt)})
+	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
+		AuthIndex:            result.AuthIndex,
+		Provider:             result.Provider,
+		ObservedAt:           result.ObservedAt,
+		ResetAt:              *result.ResetAt,
+		Remaining:            int(*result.Remaining),
+		Source:               state.SourceFreshProbe,
+		NextProbeAt:          result.ObservedAt.Add(time.Hour),
+		LongWindowResetAt:    derefTimeOrZero(result.LongWindowResetAt),
+		PlanType:             result.PlanType,
+		ShortWindowRemaining: result.ShortWindowRemaining,
+		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
+		LongWindowRemaining:  result.LongWindowRemaining,
+	})
 	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 

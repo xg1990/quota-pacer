@@ -41,6 +41,7 @@ type Entry struct {
 	LastError     string        `json:"last_error"`
 	NextProbeAt   time.Time     `json:"next_probe_at"`
 	AuthInvalid   bool          `json:"auth_invalid,omitempty"`
+	PlanType      core.PlanType `json:"plan_type,omitempty"`
 	// xAI free 策略扩展字段（旁路 store，兼容旧缓存缺省）。
 	PlanClass       string      `json:"plan_class,omitempty"`        // free | paid
 	QuotaFailCount  int         `json:"quota_fail_count,omitempty"`  // 连续额度类失败次数
@@ -48,8 +49,11 @@ type Entry struct {
 	NextEligibleAt  time.Time   `json:"next_eligible_at,omitempty"`  // free 冷却到期时刻
 	XAIDepletedKind string      `json:"xai_depleted_kind,omitempty"` // free | weekly | monthly_and_weekly
 	QuotaFailTimes  []time.Time `json:"quota_fail_times,omitempty"`  // xAI 429 失败时间戳队列
-	// LongWindowResetAt 是 xAI OAuth 周账单容量重置时刻（可选）；usage 写路径必须保留。
-	LongWindowResetAt time.Time `json:"long_window_reset_at,omitempty"`
+	// LongWindowResetAt 是长/周账单容量重置时刻（可选）；usage 写路径必须保留。
+	LongWindowResetAt    time.Time `json:"long_window_reset_at,omitempty"`
+	ShortWindowRemaining *int64    `json:"short_window_remaining,omitempty"`
+	ShortWindowResetAt   time.Time `json:"short_window_reset_at,omitempty"`
+	LongWindowRemaining  *int64    `json:"long_window_remaining,omitempty"`
 }
 
 // ProbePolicy 定义状态缓存何时必须重新 fresh probe。
@@ -78,14 +82,18 @@ type ProbeSuccess struct {
 	Source          Source
 	NextProbeAt     time.Time
 	AuthInvalid     bool
+	PlanType        core.PlanType
 	PlanClass       string
 	QuotaFailCount  int
 	FirstSuccessAt  time.Time
 	NextEligibleAt  time.Time
 	XAIDepletedKind string
 	QuotaFailTimes  []time.Time
-	// LongWindowResetAt 写入 xAI OAuth 周长窗；零值时若 PreserveLongWindow 则保留旧值。
-	LongWindowResetAt time.Time
+	// LongWindowResetAt 写入长/周长窗；零值时若 PreserveLongWindow 则保留旧值。
+	LongWindowResetAt    time.Time
+	ShortWindowRemaining *int64
+	ShortWindowResetAt   time.Time
+	LongWindowRemaining  *int64
 	// PreserveLongWindow：true 时在入参零值下保留已有 LongWindowResetAt（usage 路径）。
 	PreserveLongWindow bool
 	// PreserveXAIPolicy：true 时合并已有 xAI 策略字段（仅当入参零值）。
@@ -188,27 +196,37 @@ func (s *Store) MarkProbeSuccess(ctx context.Context, success ProbeSuccess) erro
 	defer s.mu.Unlock()
 	prev := s.entries[key]
 	entry := Entry{
-		SchemaVersion:     SchemaVersion,
-		Provider:          success.Provider,
-		ModelGroup:        entryModelGroup(success.ModelGroup),
-		AuthIndex:         authIndexKey(success.AuthIndex),
-		ObservedAt:        success.ObservedAt.UTC(),
-		ResetAt:           success.ResetAt.UTC(),
-		Remaining:         success.Remaining,
-		Source:            success.Source,
-		LastError:         "",
-		NextProbeAt:       success.NextProbeAt.UTC(),
-		AuthInvalid:       success.AuthInvalid,
-		PlanClass:         success.PlanClass,
-		QuotaFailCount:    success.QuotaFailCount,
-		FirstSuccessAt:    utcOrZero(success.FirstSuccessAt),
-		NextEligibleAt:    utcOrZero(success.NextEligibleAt),
-		XAIDepletedKind:   success.XAIDepletedKind,
-		QuotaFailTimes:    utcTimes(success.QuotaFailTimes),
-		LongWindowResetAt: utcOrZero(success.LongWindowResetAt),
+		SchemaVersion:        SchemaVersion,
+		Provider:             success.Provider,
+		ModelGroup:           entryModelGroup(success.ModelGroup),
+		AuthIndex:            authIndexKey(success.AuthIndex),
+		ObservedAt:           success.ObservedAt.UTC(),
+		ResetAt:              success.ResetAt.UTC(),
+		Remaining:            success.Remaining,
+		Source:               success.Source,
+		LastError:            "",
+		NextProbeAt:          success.NextProbeAt.UTC(),
+		AuthInvalid:          success.AuthInvalid,
+		PlanType:             success.PlanType,
+		PlanClass:            success.PlanClass,
+		QuotaFailCount:       success.QuotaFailCount,
+		FirstSuccessAt:       utcOrZero(success.FirstSuccessAt),
+		NextEligibleAt:       utcOrZero(success.NextEligibleAt),
+		XAIDepletedKind:      success.XAIDepletedKind,
+		QuotaFailTimes:       utcTimes(success.QuotaFailTimes),
+		LongWindowResetAt:    utcOrZero(success.LongWindowResetAt),
+		ShortWindowRemaining: cloneInt64Ptr(success.ShortWindowRemaining),
+		ShortWindowResetAt:   utcOrZero(success.ShortWindowResetAt),
+		LongWindowRemaining:  cloneInt64Ptr(success.LongWindowRemaining),
 	}
 	if success.PreserveLongWindow && entry.LongWindowResetAt.IsZero() {
 		entry.LongWindowResetAt = prev.LongWindowResetAt
+		if entry.LongWindowRemaining == nil {
+			entry.LongWindowRemaining = cloneInt64Ptr(prev.LongWindowRemaining)
+		}
+	}
+	if entry.PlanType == "" || entry.PlanType == core.PlanTypeUnknown {
+		entry.PlanType = prev.PlanType
 	}
 	if success.PreserveXAIPolicy {
 		if entry.PlanClass == "" {
@@ -255,6 +273,28 @@ func (s *Store) GetEntry(authIndex string, modelGroup string) (Entry, bool) {
 	defer s.mu.RUnlock()
 	entry, ok := s.entries[entryKey(authIndex, modelGroup)]
 	return entry, ok
+}
+
+// ValidEntry 返回指定 auth_index 且未过期的缓存副本。若条目不存在、版本不匹配、未观测、鉴权失败、已达 resetAt 或重置时间过旧，则返回 false。
+func (s *Store) ValidEntry(authIndex string, modelGroup string, now time.Time, policy ProbePolicy) (Entry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	entry, ok := s.entries[entryKey(authIndex, modelGroup)]
+	if !ok || entry.SchemaVersion != SchemaVersion || entry.ObservedAt.IsZero() || entry.AuthInvalid {
+		return Entry{}, false
+	}
+	if isResetReached(entry, now) || isResetTooOld(entry, ProbeCheck{Now: now, Policy: policy}) {
+		return Entry{}, false
+	}
+	return entry, true
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
 }
 
 func utcOrZero(t time.Time) time.Time {

@@ -60,6 +60,7 @@ func (r *Runtime) runProductionTask(ctx context.Context, request TaskRequest) er
 	if err := store.SaveAtomic(ctx); err != nil {
 		return err
 	}
+	evidence = attachCachedEvidence(credentials, evidence, store, request.Config.AntigravityModelGroup, now)
 	plan := priority.PlanFreshOnly(credentials, evidence, priorityOptions(request.Config, now))
 	plan = preserveProbeFailureState(plan, evidence)
 	if request.Trigger == TriggerManual {
@@ -182,6 +183,7 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 		}
 	}
 
+	allEvidence = attachCachedEvidence(allCredentials, allEvidence, store, request.Config.AntigravityModelGroup, now)
 	plan := priority.PlanFreshOnly(allCredentials, allEvidence, priorityOptions(request.Config, now))
 	plan = preserveProbeFailureState(plan, allEvidence)
 	result, applyErr := apply.Apply(ctx, apply.Request{Host: client, Auditor: r, Plan: plan, ReportSkippedPlan: true})
@@ -563,3 +565,79 @@ func (r *Runtime) RecordEvent(ctx context.Context, event apply.AuditEvent) error
 }
 
 var _ apply.Auditor = (*Runtime)(nil)
+
+func attachCachedEvidence(credentials []core.Credential, evidence []priority.ProbeEvidence, store *state.Store, modelGroup config.AntigravityModelGroup, now time.Time) []priority.ProbeEvidence {
+	if store == nil {
+		return evidence
+	}
+	hasEvidence := make(map[string]struct{}, len(evidence))
+	for _, item := range evidence {
+		hasEvidence[item.AuthIndex] = struct{}{}
+	}
+
+	merged := make([]priority.ProbeEvidence, len(evidence), len(credentials))
+	copy(merged, evidence)
+
+	for _, credential := range credentials {
+		if _, exists := hasEvidence[credential.AuthIndex]; exists {
+			continue
+		}
+		provider := filterProvider(credential)
+		groupName := probeModelGroup(provider, modelGroup)
+		entry, ok := store.ValidEntry(credential.AuthIndex, groupName, now, probePolicyForProvider(provider, defaultProbeCacheTTL))
+		if !ok {
+			continue
+		}
+
+		rem := int64(entry.Remaining)
+		var resetAt *time.Time
+		if !entry.ResetAt.IsZero() {
+			t := entry.ResetAt.UTC()
+			resetAt = &t
+		}
+		var longWindowResetAt *time.Time
+		if !entry.LongWindowResetAt.IsZero() {
+			t := entry.LongWindowResetAt.UTC()
+			longWindowResetAt = &t
+		}
+		var shortWindowResetAt *time.Time
+		if !entry.ShortWindowResetAt.IsZero() {
+			t := entry.ShortWindowResetAt.UTC()
+			shortWindowResetAt = &t
+		}
+		planType := entry.PlanType
+		if planType == "" || planType == core.PlanTypeUnknown {
+			if credential.PlanType != "" && credential.PlanType != core.PlanTypeUnknown {
+				planType = credential.PlanType
+			} else if entry.PlanClass != "" {
+				planType = xaiPlanTypeFromClass(entry.PlanClass)
+			}
+		}
+
+		merged = append(merged, priority.ProbeEvidence{
+			Provider:             provider,
+			AuthIndex:            credential.AuthIndex,
+			ObservedAt:           entry.ObservedAt,
+			ResetAt:              resetAt,
+			Remaining:            &rem,
+			LongWindowResetAt:    longWindowResetAt,
+			ShortWindowRemaining: cloneInt64Ptr(entry.ShortWindowRemaining),
+			ShortWindowResetAt:   shortWindowResetAt,
+			LongWindowRemaining:  cloneInt64Ptr(entry.LongWindowRemaining),
+			Freshness:            core.FreshnessStale,
+			ProbeStatus:          core.ProbeStatusReady,
+			Status:               priority.EvidenceStatusReady,
+			PlanType:             planType,
+			EvidenceFresh:        false,
+		})
+	}
+	return merged
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	n := *v
+	return &n
+}
