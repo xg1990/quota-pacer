@@ -518,34 +518,7 @@ func scheduleOptions(cfg config.Config, now time.Time) schedule.Options {
 }
 
 func priorityOptions(cfg config.Config, now time.Time) priority.Options {
-	options := priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange}
-	if cfg.PriorityRules.Enabled {
-		freeDepletedPriority := cfg.PriorityRules.Codex.FreeDepletedPriority
-		freeDepletedDisabled := cfg.PriorityRules.Codex.FreeDepletedDisabled
-		paidDepletedDisabled := cfg.PriorityRules.Codex.PaidDepletedDisabled
-		claudeFreePriority := cfg.PriorityRules.Claude.FreeDepletedPriority
-		claudeFreeDisabled := cfg.PriorityRules.Claude.FreeDepletedDisabled
-		claudePaidDisabled := cfg.PriorityRules.Claude.PaidDepletedDisabled
-		xaiFreePriority := cfg.PriorityRules.XAI.FreeDepletedPriority
-		xaiFreeDisabled := cfg.PriorityRules.XAI.FreeDepletedDisabled
-		xaiFreeParticipates := cfg.PriorityRules.XAI.FreeParticipatesPriority
-		xaiWeeklyPriority := cfg.PriorityRules.XAI.WeeklyDepletedPriority
-		xaiMonthlyWeeklyPriority := cfg.PriorityRules.XAI.MonthlyAndWeeklyDepletedPriority
-		xaiMonthlyWeeklyDisabled := cfg.PriorityRules.XAI.MonthlyAndWeeklyDepletedDisabled
-		options.CodexFreeDepletedPriority = &freeDepletedPriority
-		options.CodexFreeDepletedDisabled = &freeDepletedDisabled
-		options.CodexPaidDepletedDisabled = &paidDepletedDisabled
-		options.ClaudeFreeDepletedPriority = &claudeFreePriority
-		options.ClaudeFreeDepletedDisabled = &claudeFreeDisabled
-		options.ClaudePaidDepletedDisabled = &claudePaidDisabled
-		options.XAIFreeDepletedPriority = &xaiFreePriority
-		options.XAIFreeDepletedDisabled = &xaiFreeDisabled
-		options.XAIFreeParticipatesPriority = &xaiFreeParticipates
-		options.XAIWeeklyDepletedPriority = &xaiWeeklyPriority
-		options.XAIMonthlyAndWeeklyDepletedPriority = &xaiMonthlyWeeklyPriority
-		options.XAIMonthlyAndWeeklyDepletedDisabled = &xaiMonthlyWeeklyDisabled
-	}
-	return options
+	return priority.Options{Now: now, MaxPriority: 100, MinChange: cfg.MinChange}
 }
 
 func probePolicy(cacheTTL time.Duration) state.ProbePolicy {

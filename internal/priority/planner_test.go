@@ -121,24 +121,20 @@ func TestPlanFreshOnly_Claude_FreeDepleted(t *testing.T) {
 		},
 	}
 
-	depletedPriority := -1
-	depletedDisabled := true
 	options := Options{
-		Now:                        now,
-		MaxPriority:                100,
-		ClaudeFreeDepletedPriority: &depletedPriority,
-		ClaudeFreeDepletedDisabled: &depletedDisabled,
+		Now:         now,
+		MaxPriority: 100,
 	}
 
 	plan := PlanFreshOnly(credentials, evidence, options)
 	if len(plan.Items) != 1 {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
-	if plan.Items[0].Priority != -1 {
-		t.Errorf("expected priority -1, got %d", plan.Items[0].Priority)
+	if plan.Items[0].Priority != 0 {
+		t.Errorf("expected priority 0 for depleted, got %d", plan.Items[0].Priority)
 	}
-	if !plan.Items[0].Disabled {
-		t.Errorf("expected Disabled=true for free depleted")
+	if plan.Items[0].Reason != "fresh remaining depleted" {
+		t.Errorf("expected reason 'fresh remaining depleted', got %q", plan.Items[0].Reason)
 	}
 }
 
@@ -172,24 +168,20 @@ func TestPlanFreshOnly_Claude_PaidDepleted(t *testing.T) {
 		},
 	}
 
-	depletedPriority := -1
-	depletedDisabled := false // paid depleted keeps enabled
 	options := Options{
-		Now:                        now,
-		MaxPriority:                100,
-		ClaudeFreeDepletedPriority: &depletedPriority,
-		ClaudePaidDepletedDisabled: &depletedDisabled,
+		Now:         now,
+		MaxPriority: 100,
 	}
 
 	plan := PlanFreshOnly(credentials, evidence, options)
 	if len(plan.Items) != 1 {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
-	if plan.Items[0].Priority != -1 {
-		t.Errorf("expected priority -1, got %d", plan.Items[0].Priority)
+	if plan.Items[0].Priority != 0 {
+		t.Errorf("expected priority 0 for depleted, got %d", plan.Items[0].Priority)
 	}
-	if plan.Items[0].Disabled {
-		t.Errorf("expected Disabled=false for paid depleted")
+	if plan.Items[0].Reason != "fresh remaining depleted" {
+		t.Errorf("expected reason 'fresh remaining depleted', got %q", plan.Items[0].Reason)
 	}
 }
 

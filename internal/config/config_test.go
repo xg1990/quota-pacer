@@ -5,20 +5,15 @@ import (
 	"time"
 )
 
-func TestLoadBytes_ClaudePriorityRules_JSON(t *testing.T) {
+func TestLoadBytes_JSON(t *testing.T) {
 	configJSON := `{
 		"enabled": true,
 		"auto_apply": true,
 		"provider_scope": "claude",
 		"interval": "10m",
-		"priority_rules": {
-			"enabled": true,
-			"claude": {
-				"free_depleted_priority": -1,
-				"free_depleted_disabled": true,
-				"paid_depleted_disabled": false
-			}
-		}
+		"immediate_probe_limit": 20,
+		"max_concurrency": 4,
+		"active_group_size": 8
 	}`
 
 	cfg, err := LoadBytes([]byte(configJSON))
@@ -41,31 +36,23 @@ func TestLoadBytes_ClaudePriorityRules_JSON(t *testing.T) {
 	if cfg.Interval != 10*time.Minute {
 		t.Errorf("expected Interval=10m, got %v", cfg.Interval)
 	}
-	if !cfg.PriorityRules.Enabled {
-		t.Errorf("expected PriorityRules.Enabled=true")
+	if cfg.ImmediateProbeLimit != 20 {
+		t.Errorf("expected ImmediateProbeLimit=20, got %d", cfg.ImmediateProbeLimit)
 	}
-	if cfg.PriorityRules.Claude.FreeDepletedPriority != -1 {
-		t.Errorf("expected Claude.FreeDepletedPriority=-1, got %d", cfg.PriorityRules.Claude.FreeDepletedPriority)
+	if cfg.MaxConcurrency != 4 {
+		t.Errorf("expected MaxConcurrency=4, got %d", cfg.MaxConcurrency)
 	}
-	if !cfg.PriorityRules.Claude.FreeDepletedDisabled {
-		t.Errorf("expected Claude.FreeDepletedDisabled=true")
-	}
-	if cfg.PriorityRules.Claude.PaidDepletedDisabled {
-		t.Errorf("expected Claude.PaidDepletedDisabled=false")
+	if cfg.ActiveGroupSize != 8 {
+		t.Errorf("expected ActiveGroupSize=8, got %d", cfg.ActiveGroupSize)
 	}
 }
 
-func TestLoadBytes_ClaudePriorityRules_YAML(t *testing.T) {
+func TestLoadBytes_YAML(t *testing.T) {
 	configYAML := `
 enabled: true
 auto_apply: true
 provider_scope: "antigravity|codex|claude|xai"
-priority_rules:
-  enabled: true
-  claude:
-    free_depleted_priority: -1
-    free_depleted_disabled: false
-    paid_depleted_disabled: true
+interval: 20m
 `
 
 	cfg, err := LoadBytes([]byte(configYAML))
@@ -76,42 +63,22 @@ priority_rules:
 	if len(cfg.SelectedProviders) != 4 {
 		t.Fatalf("expected 4 selected providers, got %v", cfg.SelectedProviders)
 	}
-	if cfg.PriorityRules.Claude.FreeDepletedDisabled {
-		t.Errorf("expected Claude.FreeDepletedDisabled=false")
-	}
-	if !cfg.PriorityRules.Claude.PaidDepletedDisabled {
-		t.Errorf("expected Claude.PaidDepletedDisabled=true")
+	if cfg.Interval != 20*time.Minute {
+		t.Errorf("expected Interval=20m, got %v", cfg.Interval)
 	}
 }
 
-func TestLoadBytes_ClaudeLegacyKeepsEnabled(t *testing.T) {
-	configJSON := `{
-		"priority_rules": {
-			"claude": {
-				"paid_depleted_keeps_enabled": true
-			}
-		}
-	}`
-
-	cfg, err := LoadBytes([]byte(configJSON))
+func TestLoadBytes_Default(t *testing.T) {
+	cfg, err := LoadBytes([]byte("{}"))
 	if err != nil {
 		t.Fatalf("LoadBytes failed: %v", err)
 	}
 
-	if cfg.PriorityRules.Claude.PaidDepletedDisabled {
-		t.Errorf("expected PaidDepletedDisabled=false when paid_depleted_keeps_enabled=true")
+	def := Default()
+	if cfg.Interval != def.Interval {
+		t.Errorf("expected default interval %v, got %v", def.Interval, cfg.Interval)
 	}
-}
-
-func TestLoadBytes_UnsupportedPriorityProvider(t *testing.T) {
-	configJSON := `{
-		"priority_rules": {
-			"unknown_provider": {}
-		}
-	}`
-
-	_, err := LoadBytes([]byte(configJSON))
-	if err == nil {
-		t.Errorf("expected error for unsupported priority provider, got nil")
+	if cfg.ProviderScope != ProviderScopeAll {
+		t.Errorf("expected default ProviderScopeAll, got %v", cfg.ProviderScope)
 	}
 }

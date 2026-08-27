@@ -51,9 +51,6 @@ func TestRuntime_RegisterAndConfig(t *testing.T) {
 enabled: true
 auto_apply: true
 provider_scope: "claude"
-priority_rules:
-  enabled: true
-  claude:
 `
 	res, err := rt.Register(context.Background(), RegisterRequest{ConfigYAML: cfgYAML})
 	if err != nil {

@@ -173,7 +173,7 @@ func registrationResult() RegisterResult {
 		SchemaVersion: 1,
 		Metadata: Metadata{
 			Name:             config.PluginID,
-			Version:          "1.0.1",
+			Version:          "1.0.3",
 			Author:           "CPA Plugins",
 			GitHubRepository: "https://github.com/xg1990/quota-pacer",
 			Description:      "Fresh evidence based credential quota-pacing management API.",
@@ -188,7 +188,6 @@ func registrationResult() RegisterResult {
 
 func configFields() []ConfigField {
 	defaults := config.Default()
-	rules := defaults.PriorityRules
 	return []ConfigField{
 		{Name: "auto_apply", Type: "boolean", Description: localizedDescription("启用定时自动优先级排序并写回；默认 false，手动执行仍可用。", "Enable scheduled automatic priority sorting and write-back; default false so manual runs remain available."), DefaultValue: defaults.AutoApply},
 		{Name: "provider_scope", Type: "string", Description: localizedDescription("排序提供商：填 all 表示全部；或填单个/多个提供商，多个用 | 分隔，例如 antigravity|codex|claude|xai。", "Providers to sort: all for every supported provider, or a single/multiple list separated by |, e.g. antigravity|codex|claude|xai."), DefaultValue: string(defaults.ProviderScope)},
@@ -197,19 +196,6 @@ func configFields() []ConfigField {
 		{Name: "immediate_probe_limit", Type: "integer", Description: localizedDescription("单轮立即探测凭证上限；超过后分批探测。默认 30。", "Max credentials probed immediately per round; excess are batched. Default 30."), DefaultValue: defaults.ImmediateProbeLimit},
 		{Name: "active_group_size", Type: "integer", Description: localizedDescription("分批探测时每批凭证数。默认 10。", "Credentials per batch when probing in batches. Default 10."), DefaultValue: defaults.ActiveGroupSize},
 		{Name: "max_concurrency", Type: "integer", Description: localizedDescription("探测并发上限。默认 6。", "Probe concurrency limit. Default 6."), DefaultValue: defaults.MaxConcurrency},
-		{Name: "priority_rules.enabled", Type: "boolean", Description: localizedDescription("启用自定义优先级规则；关闭时使用内置策略。默认 false。", "Enable custom priority rules; when false, built-in strategy is used. Default false."), DefaultValue: rules.Enabled},
-		{Name: "priority_rules.codex.free_depleted_priority", Type: "integer", Description: localizedDescription("Codex Free 额度为 0 时写入的优先级。默认 -1。", "Priority written when Codex Free quota is 0. Default -1."), DefaultValue: rules.Codex.FreeDepletedPriority},
-		{Name: "priority_rules.codex.free_depleted_disabled", Type: "boolean", Description: localizedDescription("Codex Free 额度为 0 时是否禁用。默认 true。", "Disable Codex Free when quota is 0. Default true."), DefaultValue: rules.Codex.FreeDepletedDisabled},
-		{Name: "priority_rules.codex.paid_depleted_disabled", Type: "boolean", Description: localizedDescription("Codex Plus/Pro/Team 耗尽时是否禁用。true=禁用，false=保持启用。默认 false。", "Disable Codex Plus/Pro/Team when depleted. true=disable, false=keep enabled. Default false."), DefaultValue: rules.Codex.PaidDepletedDisabled},
-		{Name: "priority_rules.claude.free_depleted_priority", Type: "integer", Description: localizedDescription("Claude Free 额度为 0 时写入的优先级。默认 -1。", "Priority written when Claude Free quota is 0. Default -1."), DefaultValue: rules.Claude.FreeDepletedPriority},
-		{Name: "priority_rules.claude.free_depleted_disabled", Type: "boolean", Description: localizedDescription("Claude Free 额度为 0 时是否禁用。默认 true。", "Disable Claude Free when quota is 0. Default true."), DefaultValue: rules.Claude.FreeDepletedDisabled},
-		{Name: "priority_rules.claude.paid_depleted_disabled", Type: "boolean", Description: localizedDescription("Claude Pro/Team 耗尽时是否禁用。true=禁用，false=保持启用。默认 false。", "Disable Claude Pro/Team when depleted. true=disable, false=keep enabled. Default false."), DefaultValue: rules.Claude.PaidDepletedDisabled},
-		{Name: "priority_rules.xai.free_depleted_priority", Type: "integer", Description: localizedDescription("xAI 免费额度耗尽时写入的优先级。默认 -1。", "Priority when xAI free usage is depleted. Default -1."), DefaultValue: rules.XAI.FreeDepletedPriority},
-		{Name: "priority_rules.xai.free_depleted_disabled", Type: "boolean", Description: localizedDescription("xAI 免费额度耗尽时是否硬禁用。默认 false（软禁用：仅降 priority，不 PatchDisabled）。", "Hard-disable when xAI free usage is depleted. Default false (soft-disable: lower priority only, no PatchDisabled)."), DefaultValue: rules.XAI.FreeDepletedDisabled},
-		{Name: "priority_rules.xai.free_participates_priority", Type: "boolean", Description: localizedDescription("Free 凭证是否参与优先级排序。默认 false（仅保留 429 耗尽/冷却/401）；显式 true 才 opt-in free-first。", "Whether Free credentials participate in priority sorting. Default false (keep 429 depletion/cooldown/401 only); set true to opt in free-first."), DefaultValue: rules.XAI.FreeParticipatesPriority},
-		{Name: "priority_rules.xai.weekly_depleted_priority", Type: "integer", Description: localizedDescription("xAI 仅周限额耗尽时写入的优先级。默认 -1。", "Priority when only xAI weekly limit is depleted. Default -1."), DefaultValue: rules.XAI.WeeklyDepletedPriority},
-		{Name: "priority_rules.xai.monthly_and_weekly_depleted_priority", Type: "integer", Description: localizedDescription("xAI 周与月均耗尽时写入的优先级。默认 -1。", "Priority when xAI weekly and monthly are depleted. Default -1."), DefaultValue: rules.XAI.MonthlyAndWeeklyDepletedPriority},
-		{Name: "priority_rules.xai.monthly_and_weekly_depleted_disabled", Type: "boolean", Description: localizedDescription("xAI 周与月均耗尽时是否禁用。默认 true。", "Disable when xAI weekly and monthly are depleted. Default true."), DefaultValue: rules.XAI.MonthlyAndWeeklyDepletedDisabled},
 	}
 }
 

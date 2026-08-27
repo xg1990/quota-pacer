@@ -10,24 +10,11 @@ import (
 
 const maxEnabledPriority = 999
 
-// Options 是 fresh-only 优先级规划器的已解析策略参数。
+// Options 是 fresh-only 优先级规划器的策略参数。
 type Options struct {
-	Now                        time.Time
-	MaxPriority                int
-	CodexFreeDepletedPriority  *int
-	CodexFreeDepletedDisabled  *bool
-	CodexPaidDepletedDisabled  *bool
-	ClaudeFreeDepletedPriority *int
-	ClaudeFreeDepletedDisabled *bool
-	ClaudePaidDepletedDisabled *bool
-	XAIFreeDepletedPriority    *int
-	XAIFreeDepletedDisabled    *bool
-	// XAIFreeParticipatesPriority：true 时 free 参与正优先级/free-first/uniqueness；nil/false（默认）时仅保留耗尽/冷却/401 链。
-	XAIFreeParticipatesPriority         *bool
-	XAIWeeklyDepletedPriority           *int
-	XAIMonthlyAndWeeklyDepletedPriority *int
-	XAIMonthlyAndWeeklyDepletedDisabled *bool
-	MinChange                           int
+	Now         time.Time
+	MaxPriority int
+	MinChange   int
 }
 
 // ProbeEvidence 是本轮 probe 产出的排序证据；EvidenceFresh=false 时不得驱动变更。
@@ -108,11 +95,10 @@ type Plan struct {
 // PlanFreshOnly 只使用本轮 fresh probe evidence 生成优先级和禁用变更。
 func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, options Options) Plan {
 	evidenceByAuthIndex := freshEvidenceByAuthIndex(evidence)
-	items := initialItems(credentials, evidenceByAuthIndex, options)
+	items := initialItems(credentials, evidenceByAuthIndex)
 	planFreshPositive(items, options)
 	// 跨账号全局优先级去重：保证全量启用态正优先级槽位唯一，且直接反映全局 Pacing 排序
 	ensureUniquePriorities(items, options)
-	capExcludedXAIFreePriorities(items, options)
 	sortPlanItems(items)
 	for i := range items {
 		items[i].PacingScore = pacingScore(items[i], options.Now)
@@ -137,7 +123,7 @@ func isFreshReadyEvidence(evidence ProbeEvidence) bool {
 		(evidence.Status == EvidenceStatusReady || evidence.Status == EvidenceStatusAuthInvalid)
 }
 
-func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]ProbeEvidence, options Options) []PlanItem {
+func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]ProbeEvidence) []PlanItem {
 	items := make([]PlanItem, len(credentials))
 	for index, credential := range credentials {
 		item := PlanItem{
@@ -149,98 +135,19 @@ func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]
 		}
 		evidence, ok := evidenceByAuthIndex[credential.AuthIndex]
 		if ok {
+			item.PlanType = evidence.PlanType
+			item.ResetAt = evidence.ResetAt
+			item.Remaining = evidence.Remaining
+			item.LongWindowResetAt = evidence.LongWindowResetAt
+			item.EvidenceFresh = true
+
 			if isXAIAuthInvalid(credential, evidence) {
-				item.EvidenceFresh = true
 				item.Priority = -1
 				item.Disabled = true
 				item.Reason = "xai auth invalid"
-			} else if isCodexFreeDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = codexFreeDepletedPriority(options)
-				item.Disabled = credential.Disabled || codexFreeDepletedDisabled(options)
+			} else if evidence.Remaining != nil && *evidence.Remaining <= 0 {
+				item.Priority = 0
 				item.Reason = "fresh remaining depleted"
-			} else if isCodexPaidDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = codexFreeDepletedPriority(options)
-				item.Disabled = credential.Disabled || codexPaidDepletedDisabled(options)
-				item.Reason = "fresh paid remaining depleted"
-			} else if isClaudeFreeDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = claudeFreeDepletedPriority(options)
-				item.Disabled = credential.Disabled || claudeFreeDepletedDisabled(options)
-				item.Reason = "fresh remaining depleted"
-			} else if isClaudePaidDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = claudeFreeDepletedPriority(options)
-				item.Disabled = credential.Disabled || claudePaidDepletedDisabled(options)
-				item.Reason = "fresh paid remaining depleted"
-			} else if isXAIFreeCooldown(credential, evidence, options) {
-				item.PlanType = evidence.PlanType
-				if item.PlanType == core.PlanTypeUnknown && evidence.XAIPlanClass == "free" {
-					item.PlanType = core.PlanTypeFree
-				}
-				item.ResetAt = evidence.ResetAt
-				if evidence.XAINextEligibleAt != nil {
-					item.ResetAt = evidence.XAINextEligibleAt
-				}
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = xaiFreeDepletedPriority(options)
-				// Soft disable default: free_depleted_disabled=false clears host hard-disable.
-				item.Disabled = xaiFreeDepletedDisabled(options)
-				item.Reason = "fresh remaining depleted"
-			} else if isXAIMonthlyAndWeeklyDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = xaiMonthlyAndWeeklyDepletedPriority(options)
-				item.Disabled = credential.Disabled || xaiMonthlyAndWeeklyDepletedDisabled(options)
-				item.Reason = "fresh monthly and weekly depleted"
-			} else if isXAIWeeklyDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = xaiWeeklyDepletedPriority(options)
-				// 仅周限额耗尽：降优先级，不禁用。
-				// 不得继承宿主 free_depleted 的 Disabled=true，否则 free 刷新后若再 probe 到 weekly 会永久锁死。
-				item.Disabled = false
-				item.Reason = "fresh weekly depleted"
-			} else if isAntigravityWeeklyDepleted(credential, evidence) {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
-				item.Priority = -1
-				item.Disabled = true
-				item.Reason = "fresh remaining depleted"
-			} else if evidence.Remaining != nil && evidence.ResetAt != nil {
-				item.PlanType = evidence.PlanType
-				item.ResetAt = evidence.ResetAt
-				item.Remaining = evidence.Remaining
-				item.LongWindowResetAt = evidence.LongWindowResetAt
-				item.EvidenceFresh = true
 			}
 		}
 		items[index] = item
@@ -248,182 +155,16 @@ func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]
 	return items
 }
 
-func isCodexFreeDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderCodex &&
-		evidence.PlanType == core.PlanTypeFree &&
-		evidence.Remaining != nil &&
-		*evidence.Remaining <= 0
-}
-
-func isCodexPaidDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderCodex &&
-		paidRank(evidence.PlanType) > 0 &&
-		evidence.Remaining != nil &&
-		*evidence.Remaining <= 0
-}
-
-func isClaudeFreeDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderClaude &&
-		evidence.PlanType == core.PlanTypeFree &&
-		evidence.Remaining != nil &&
-		*evidence.Remaining <= 0
-}
-
-func isClaudePaidDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderClaude &&
-		paidRank(evidence.PlanType) > 0 &&
-		evidence.Remaining != nil &&
-		*evidence.Remaining <= 0
-}
-
-func isAntigravityWeeklyDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderAntigravity &&
-		evidence.Remaining != nil &&
-		*evidence.Remaining <= 0
-}
-
 func isXAIAuthInvalid(credential core.Credential, evidence ProbeEvidence) bool {
 	return isXAICredential(credential) && evidence.Status == EvidenceStatusAuthInvalid
-}
-
-func isFreeOrUnknownPlan(planType core.PlanType) bool {
-	return planType == core.PlanTypeFree || planType == core.PlanTypeUnknown
-}
-
-func codexFreeDepletedPriority(options Options) int {
-	if options.CodexFreeDepletedPriority == nil {
-		return -1
-	}
-	return *options.CodexFreeDepletedPriority
-}
-
-func codexFreeDepletedDisabled(options Options) bool {
-	if options.CodexFreeDepletedDisabled == nil {
-		return true
-	}
-	return *options.CodexFreeDepletedDisabled
-}
-
-func codexPaidDepletedDisabled(options Options) bool {
-	if options.CodexPaidDepletedDisabled == nil {
-		return false
-	}
-	return *options.CodexPaidDepletedDisabled
-}
-
-func claudeFreeDepletedPriority(options Options) int {
-	if options.ClaudeFreeDepletedPriority == nil {
-		return -1
-	}
-	return *options.ClaudeFreeDepletedPriority
-}
-
-func claudeFreeDepletedDisabled(options Options) bool {
-	if options.ClaudeFreeDepletedDisabled == nil {
-		return true
-	}
-	return *options.ClaudeFreeDepletedDisabled
-}
-
-func claudePaidDepletedDisabled(options Options) bool {
-	if options.ClaudePaidDepletedDisabled == nil {
-		return false
-	}
-	return *options.ClaudePaidDepletedDisabled
 }
 
 func isXAICredential(credential core.Credential) bool {
 	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderXAI
 }
 
-func isXAIFreeDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return isXAICredential(credential) &&
-		(evidence.XAIDepletedKind == "free" || (evidence.PlanType == core.PlanTypeFree && evidence.Remaining != nil && *evidence.Remaining <= 0 && evidence.XAIDepletedKind == ""))
-}
-
-// isXAIFreeCooldown: free path only uses consecutive-fail + 24h cooldown (not weekly/monthly).
-func isXAIFreeCooldown(credential core.Credential, evidence ProbeEvidence, options Options) bool {
-	if !isXAICredential(credential) {
-		return false
-	}
-	if evidence.XAIDepletedKind == "weekly" || evidence.XAIDepletedKind == "monthly_and_weekly" {
-		return false
-	}
-	if !isXAIFreeDepleted(credential, evidence) && evidence.XAIQuotaFailCount < 3 {
-		return false
-	}
-	// Cooldown active when next_eligible is in the future, or depleted with remaining<=0.
-	if evidence.XAINextEligibleAt != nil && options.Now.Before(*evidence.XAINextEligibleAt) {
-		return true
-	}
-	if evidence.XAINextEligibleAt == nil && isXAIFreeDepleted(credential, evidence) {
-		return true
-	}
-	return false
-}
-
-func isXAIWeeklyDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return isXAICredential(credential) && evidence.XAIDepletedKind == "weekly"
-}
-
-func isXAIMonthlyAndWeeklyDepleted(credential core.Credential, evidence ProbeEvidence) bool {
-	return isXAICredential(credential) && evidence.XAIDepletedKind == "monthly_and_weekly"
-}
-
-func xaiFreeDepletedPriority(options Options) int {
-	if options.XAIFreeDepletedPriority == nil {
-		return -1
-	}
-	return *options.XAIFreeDepletedPriority
-}
-
-func xaiFreeDepletedDisabled(options Options) bool {
-	// 默认软禁用：nil 回退 false，仅降 priority；yaml 显式 true 仍硬禁用。
-	if options.XAIFreeDepletedDisabled == nil {
-		return false
-	}
-	return *options.XAIFreeDepletedDisabled
-}
-
-// xaiFreeParticipatesPriority 默认 false：free 不参与正优先级提升与 free-first；显式 true 才 opt-in。
-func xaiFreeParticipatesPriority(options Options) bool {
-	if options.XAIFreeParticipatesPriority == nil {
-		return false
-	}
-	return *options.XAIFreeParticipatesPriority
-}
-
-// isXAIFreePlanItem 识别 xAI free/unknown 套餐（不含 paid）。
-func isXAIFreePlanItem(item PlanItem) bool {
-	if planItemProvider(item) != core.ProviderXAI {
-		return false
-	}
-	return item.PlanType == core.PlanTypeFree || item.PlanType == core.PlanTypeUnknown
-}
-
-func xaiWeeklyDepletedPriority(options Options) int {
-	if options.XAIWeeklyDepletedPriority == nil {
-		return -1
-	}
-	return *options.XAIWeeklyDepletedPriority
-}
-
-func xaiMonthlyAndWeeklyDepletedPriority(options Options) int {
-	if options.XAIMonthlyAndWeeklyDepletedPriority == nil {
-		return -1
-	}
-	return *options.XAIMonthlyAndWeeklyDepletedPriority
-}
-
-func xaiMonthlyAndWeeklyDepletedDisabled(options Options) bool {
-	if options.XAIMonthlyAndWeeklyDepletedDisabled == nil {
-		return true
-	}
-	return *options.XAIMonthlyAndWeeklyDepletedDisabled
-}
-
 func planFreshPositive(items []PlanItem, options Options) {
-	candidates := positiveCandidates(items, options)
+	candidates := positiveCandidates(items)
 	slices.SortStableFunc(candidates, func(left int, right int) int {
 		return compareCandidates(items[left], items[right], options)
 	})
@@ -446,15 +187,11 @@ func planFreshPositive(items []PlanItem, options Options) {
 
 // ensureUniquePriorities 保证跨账号全局启用态 priority>=1 的槽位唯一。
 // 参与者包括：本轮 fresh 正额度、以及仍占用正优先级的无 fresh 同伴（历史局部写回残留）。
-// 不改写 disabled 或 priority<=0（含 depleted -1）的凭证。
+// 不改写 disabled 或 priority<=0（含 depleted 0 / auth invalid -1）的凭证。
 func ensureUniquePriorities(items []PlanItem, options Options) {
 	group := make([]int, 0, len(items))
 	for index, item := range items {
 		if item.Disabled || item.Priority < 1 {
-			continue
-		}
-		// free_participates_priority=false：xAI free 不参与 uniqueness 重排。
-		if !xaiFreeParticipatesPriority(options) && isXAIFreePlanItem(item) {
 			continue
 		}
 		group = append(group, index)
@@ -544,25 +281,6 @@ func hasPriorityCollision(items []PlanItem, group []int) bool {
 	return false
 }
 
-func capExcludedXAIFreePriorities(items []PlanItem, options Options) {
-	if xaiFreeParticipatesPriority(options) {
-		return
-	}
-	for index := range items {
-		item := &items[index]
-		if item.Disabled || item.Priority <= maxEnabledPriority || !isXAIFreePlanItem(*item) {
-			continue
-		}
-		item.Priority = maxEnabledPriority
-		if !item.EvidenceFresh {
-			item.ForceWrite = true
-			item.Reason = "xai free priority cap"
-		} else if item.Reason == "keep current state" || item.Reason == "" {
-			item.Reason = "xai free priority cap"
-		}
-	}
-}
-
 func needsStartRealign(items []PlanItem, group []int, options Options) bool {
 	// 预留：当前仅在碰撞时 re-pack；保留钩子便于后续策略扩展。
 	_ = options
@@ -607,14 +325,10 @@ func planItemProvider(item PlanItem) core.Provider {
 	}
 }
 
-func positiveCandidates(items []PlanItem, options Options) []int {
+func positiveCandidates(items []PlanItem) []int {
 	candidates := make([]int, 0, len(items))
 	for index, item := range items {
 		if !item.EvidenceFresh || item.Remaining == nil {
-			continue
-		}
-		// free_participates_priority=false：xAI free 不进正优先级提升。
-		if !xaiFreeParticipatesPriority(options) && isXAIFreePlanItem(item) {
 			continue
 		}
 		if *item.Remaining > 0 {

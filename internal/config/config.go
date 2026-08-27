@@ -27,29 +27,28 @@ var ErrInvalidConfig = errors.New("config: invalid")
 
 // Config 是插件自有配置的已校验形态。
 //
-// Enabled 为顶层插件开关；PriorityRules.Enabled 为自定义排序规则开关，二者语义独立。
+// Enabled 为顶层插件开关。
 // DisabledGroupSize / DisabledProbeInterval 仍可从旧配置解析进字段，但不再驱动探测调度
 // （调度使用 Interval 与 ActiveGroupSize）。
 // 探测缓存路径与 freshness TTL 为包内常量，不暴露为可配置字段。
 type Config struct {
-	Enabled               bool                  `json:"enabled"`
-	AutoApply             bool                  `json:"auto_apply"`
-	ProviderScope         ProviderScope         `json:"provider_scope"`
-	SelectedProviders     []string              `json:"selected_providers"`
-	AntigravityModelGroup AntigravityModelGroup `json:"antigravity_model_group"`
-	Interval              time.Duration         `json:"interval"`
-	ImmediateProbeLimit   int                   `json:"immediate_probe_limit"`
-	MaxConcurrency        int                   `json:"max_concurrency"`
-	MinChange             int                   `json:"min_change"`
-	TopPriorityProbeCount int                   `json:"top_priority_probe_count"`
-	ActiveGroupSize       int                   `json:"active_group_size"`
-	ActiveGroupJitter     time.Duration         `json:"active_group_jitter"`
+	Enabled               bool                        `json:"enabled"`
+	AutoApply             bool                        `json:"auto_apply"`
+	ProviderScope         ProviderScope               `json:"provider_scope"`
+	SelectedProviders     []string                    `json:"selected_providers"`
+	AntigravityModelGroup AntigravityModelGroup       `json:"antigravity_model_group"`
+	Interval              time.Duration               `json:"interval"`
+	ImmediateProbeLimit   int                         `json:"immediate_probe_limit"`
+	MaxConcurrency        int                         `json:"max_concurrency"`
+	MinChange             int                         `json:"min_change"`
+	TopPriorityProbeCount int                         `json:"top_priority_probe_count"`
+	ActiveGroupSize       int                         `json:"active_group_size"`
+	ActiveGroupJitter     time.Duration               `json:"active_group_jitter"`
 	// DisabledGroupSize 兼容旧键 disabled_group_size；不再驱动调度。
 	DisabledGroupSize int `json:"disabled_group_size"`
 	// DisabledProbeInterval 兼容旧键 disabled_probe_interval；不再驱动 1h 冷冻调度。
 	DisabledProbeInterval time.Duration               `json:"disabled_probe_interval"`
 	ProviderOverrides     map[string]ProviderOverride `json:"provider_overrides,omitempty"`
-	PriorityRules         PriorityRules               `json:"priority_rules"`
 }
 
 // ProviderOverride 是按 provider 覆盖的可选配置。
@@ -58,46 +57,6 @@ type ProviderOverride struct {
 	AutoApply      *bool         `json:"auto_apply,omitempty"`
 	Interval       time.Duration `json:"interval,omitempty"`
 	MaxConcurrency int           `json:"max_concurrency,omitempty"`
-}
-
-// PriorityRules 是管理页可编辑的 provider 独立排序规则草稿。
-type PriorityRules struct {
-	Enabled     bool                     `json:"enabled"`
-	Antigravity AntigravityPriorityRules `json:"antigravity"`
-	Codex       CodexPriorityRules       `json:"codex"`
-	Claude      ClaudePriorityRules      `json:"claude"`
-	XAI         XAIPriorityRules         `json:"xai"`
-}
-
-// AntigravityPriorityRules 是 Antigravity 排序规则的可配置部分。
-type AntigravityPriorityRules struct {
-}
-
-// CodexPriorityRules 是 Codex 排序规则的可配置部分。
-type CodexPriorityRules struct {
-	FreeDepletedPriority int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
-	// PaidDepletedDisabled：Plus/Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
-	PaidDepletedDisabled bool `json:"paid_depleted_disabled"`
-}
-
-// ClaudePriorityRules 是 Claude 排序规则的可配置部分。
-type ClaudePriorityRules struct {
-	FreeDepletedPriority int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
-	// PaidDepletedDisabled：Pro/Team 耗尽时是否禁用；true=禁用，false=保持启用。
-	PaidDepletedDisabled bool `json:"paid_depleted_disabled"`
-}
-
-// XAIPriorityRules 是 xAI 排序规则的可配置部分。
-type XAIPriorityRules struct {
-	FreeDepletedPriority int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled bool `json:"free_depleted_disabled"`
-	// FreeParticipatesPriority：true 时 free 参与正优先级/free-first；false（默认）时仅保留耗尽/冷却/401。
-	FreeParticipatesPriority         bool `json:"free_participates_priority"`
-	WeeklyDepletedPriority           int  `json:"weekly_depleted_priority"`
-	MonthlyAndWeeklyDepletedPriority int  `json:"monthly_and_weekly_depleted_priority"`
-	MonthlyAndWeeklyDepletedDisabled bool `json:"monthly_and_weekly_depleted_disabled"`
 }
 
 type rawConfig struct {
@@ -116,7 +75,6 @@ type rawConfig struct {
 	DisabledGroupSize     *int                           `json:"disabled_group_size"`
 	DisabledProbeInterval *rawDuration                   `json:"disabled_probe_interval"`
 	ProviderOverrides     map[string]rawProviderOverride `json:"provider_overrides"`
-	PriorityRules         *rawPriorityRules              `json:"priority_rules"`
 }
 
 type rawProviderOverride struct {
@@ -124,83 +82,6 @@ type rawProviderOverride struct {
 	AutoApply      *bool        `json:"auto_apply"`
 	Interval       *rawDuration `json:"interval"`
 	MaxConcurrency *int         `json:"max_concurrency"`
-}
-
-type rawPriorityRules struct {
-	Enabled     *bool                   `json:"enabled"`
-	Antigravity *rawAntigravityPriority `json:"antigravity"`
-	Codex       *rawCodexPriority       `json:"codex"`
-	Claude      *rawClaudePriority      `json:"claude"`
-	XAI         *rawXAIPriority         `json:"xai"`
-	Unsupported map[string]json.RawMessage
-}
-
-type rawAntigravityPriority struct {
-}
-
-type rawCodexPriority struct {
-	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
-	PaidDepletedDisabled     *bool `json:"paid_depleted_disabled"`
-	PaidDepletedKeepsEnabled *bool `json:"paid_depleted_keeps_enabled"` // 兼容旧键：true=保持启用 → disabled=false
-}
-
-type rawClaudePriority struct {
-	FreeDepletedPriority     *int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled     *bool `json:"free_depleted_disabled"`
-	PaidDepletedDisabled     *bool `json:"paid_depleted_disabled"`
-	PaidDepletedKeepsEnabled *bool `json:"paid_depleted_keeps_enabled"` // 兼容旧键：true=保持启用 → disabled=false
-}
-
-type rawXAIPriority struct {
-	FreeDepletedPriority             *int  `json:"free_depleted_priority"`
-	FreeDepletedDisabled             *bool `json:"free_depleted_disabled"`
-	FreeParticipatesPriority         *bool `json:"free_participates_priority"`
-	WeeklyDepletedPriority           *int  `json:"weekly_depleted_priority"`
-	MonthlyAndWeeklyDepletedPriority *int  `json:"monthly_and_weekly_depleted_priority"`
-	MonthlyAndWeeklyDepletedDisabled *bool `json:"monthly_and_weekly_depleted_disabled"`
-}
-
-func (raw *rawPriorityRules) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) > 0 && trimmed[0] == '"' {
-		var encoded string
-		if err := json.Unmarshal(trimmed, &encoded); err != nil {
-			return err
-		}
-		inner := strings.TrimSpace(encoded)
-		if inner == "" {
-			*raw = rawPriorityRules{}
-			return nil
-		}
-		if strings.HasPrefix(inner, "{") {
-			return json.Unmarshal([]byte(inner), raw)
-		}
-		fields, err := parseYAMLMap(inner)
-		if err != nil {
-			return err
-		}
-		encodedFields, err := json.Marshal(fields)
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal(encodedFields, raw)
-	}
-	type alias rawPriorityRules
-	var decoded alias
-	if err := json.Unmarshal(trimmed, &decoded); err != nil {
-		return err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(trimmed, &fields); err != nil {
-		return err
-	}
-	for _, allowed := range []string{"enabled", "antigravity", "codex", "claude", "xai"} {
-		delete(fields, allowed)
-	}
-	*raw = rawPriorityRules(decoded)
-	raw.Unsupported = fields
-	return nil
 }
 
 type selectedProviderList struct {
@@ -269,34 +150,6 @@ func Default() Config {
 		// 不再作为默认 1h 冷冻调度语义（调度改用 Interval + ActiveGroupSize）。
 		DisabledGroupSize:     5,
 		DisabledProbeInterval: 0,
-		PriorityRules:         defaultPriorityRules(),
-	}
-}
-
-func defaultPriorityRules() PriorityRules {
-	return PriorityRules{
-		Enabled:     false,
-		Antigravity: AntigravityPriorityRules{},
-		Codex: CodexPriorityRules{
-			FreeDepletedPriority: -1,
-			FreeDepletedDisabled: true,
-			PaidDepletedDisabled: false,
-		},
-		Claude: ClaudePriorityRules{
-			FreeDepletedPriority: -1,
-			FreeDepletedDisabled: true,
-			PaidDepletedDisabled: false,
-		},
-		XAI: XAIPriorityRules{
-			FreeDepletedPriority: -1,
-			// 方案 A：默认软禁用（仅降 priority），不 PatchDisabled。
-			FreeDepletedDisabled: false,
-			// Free 默认不参与正优先级排序；显式 free_participates_priority: true 才 opt-in。
-			FreeParticipatesPriority:         false,
-			WeeklyDepletedPriority:           -1,
-			MonthlyAndWeeklyDepletedPriority: -1,
-			MonthlyAndWeeklyDepletedDisabled: true,
-		},
 	}
 }
 
@@ -316,16 +169,7 @@ func decodeRaw(data []byte) (rawConfig, error) {
 	}
 	var raw rawConfig
 	if trimmed[0] == '{' {
-		var generic map[string]any
-		if err := json.Unmarshal(trimmed, &generic); err != nil {
-			return rawConfig{}, invalid("config", "json", "must be valid JSON")
-		}
-		normalizePriorityRulesKeys(generic)
-		encoded, err := json.Marshal(generic)
-		if err != nil {
-			return rawConfig{}, invalid("config", "json", "must be encodable")
-		}
-		if err := json.Unmarshal(encoded, &raw); err != nil {
+		if err := json.Unmarshal(trimmed, &raw); err != nil {
 			return rawConfig{}, invalid("config", err.Error(), "must match config schema")
 		}
 		return raw, nil
@@ -385,13 +229,6 @@ func (raw rawConfig) apply(cfg Config) (Config, error) {
 		cfg.ProviderScope = ProviderScopeAll
 		cfg.SelectedProviders = nil
 	}
-	if raw.PriorityRules != nil {
-		priorityRules, err := raw.PriorityRules.apply(cfg.PriorityRules)
-		if err != nil {
-			return Config{}, err
-		}
-		cfg.PriorityRules = priorityRules
-	}
 	for _, item := range []struct {
 		field  string
 		raw    *rawDuration
@@ -441,102 +278,6 @@ func (raw rawConfig) apply(cfg Config) (Config, error) {
 		cfg.ProviderOverrides[providerName] = override
 	}
 	return cfg, nil
-}
-
-func (raw rawPriorityRules) apply(rules PriorityRules) (PriorityRules, error) {
-	for provider := range raw.Unsupported {
-		return PriorityRules{}, invalid("priority_rules."+provider, provider, "only antigravity, codex, claude and xai are supported")
-	}
-	if raw.Enabled != nil {
-		rules.Enabled = *raw.Enabled
-	}
-	if raw.Antigravity != nil {
-		updated, err := raw.Antigravity.apply(rules.Antigravity)
-		if err != nil {
-			return PriorityRules{}, err
-		}
-		rules.Antigravity = updated
-	}
-	if raw.Codex != nil {
-		updated, err := raw.Codex.apply(rules.Codex)
-		if err != nil {
-			return PriorityRules{}, err
-		}
-		rules.Codex = updated
-	}
-	if raw.Claude != nil {
-		updated, err := raw.Claude.apply(rules.Claude)
-		if err != nil {
-			return PriorityRules{}, err
-		}
-		rules.Claude = updated
-	}
-	if raw.XAI != nil {
-		updated, err := raw.XAI.apply(rules.XAI)
-		if err != nil {
-			return PriorityRules{}, err
-		}
-		rules.XAI = updated
-	}
-	return rules, nil
-}
-
-func (raw rawAntigravityPriority) apply(rule AntigravityPriorityRules) (AntigravityPriorityRules, error) {
-	return rule, nil
-}
-
-func (raw rawCodexPriority) apply(rule CodexPriorityRules) (CodexPriorityRules, error) {
-	if raw.FreeDepletedPriority != nil {
-		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
-	}
-	if raw.FreeDepletedDisabled != nil {
-		rule.FreeDepletedDisabled = *raw.FreeDepletedDisabled
-	}
-	// 新键优先；旧 keeps_enabled 取反兼容。
-	if raw.PaidDepletedDisabled != nil {
-		rule.PaidDepletedDisabled = *raw.PaidDepletedDisabled
-	} else if raw.PaidDepletedKeepsEnabled != nil {
-		rule.PaidDepletedDisabled = !*raw.PaidDepletedKeepsEnabled
-	}
-	return rule, nil
-}
-
-func (raw rawClaudePriority) apply(rule ClaudePriorityRules) (ClaudePriorityRules, error) {
-	if raw.FreeDepletedPriority != nil {
-		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
-	}
-	if raw.FreeDepletedDisabled != nil {
-		rule.FreeDepletedDisabled = *raw.FreeDepletedDisabled
-	}
-	// 新键优先；旧 keeps_enabled 取反兼容。
-	if raw.PaidDepletedDisabled != nil {
-		rule.PaidDepletedDisabled = *raw.PaidDepletedDisabled
-	} else if raw.PaidDepletedKeepsEnabled != nil {
-		rule.PaidDepletedDisabled = !*raw.PaidDepletedKeepsEnabled
-	}
-	return rule, nil
-}
-
-func (raw rawXAIPriority) apply(rule XAIPriorityRules) (XAIPriorityRules, error) {
-	if raw.FreeDepletedPriority != nil {
-		rule.FreeDepletedPriority = *raw.FreeDepletedPriority
-	}
-	if raw.FreeDepletedDisabled != nil {
-		rule.FreeDepletedDisabled = *raw.FreeDepletedDisabled
-	}
-	if raw.FreeParticipatesPriority != nil {
-		rule.FreeParticipatesPriority = *raw.FreeParticipatesPriority
-	}
-	if raw.WeeklyDepletedPriority != nil {
-		rule.WeeklyDepletedPriority = *raw.WeeklyDepletedPriority
-	}
-	if raw.MonthlyAndWeeklyDepletedPriority != nil {
-		rule.MonthlyAndWeeklyDepletedPriority = *raw.MonthlyAndWeeklyDepletedPriority
-	}
-	if raw.MonthlyAndWeeklyDepletedDisabled != nil {
-		rule.MonthlyAndWeeklyDepletedDisabled = *raw.MonthlyAndWeeklyDepletedDisabled
-	}
-	return rule, nil
 }
 
 func (raw rawProviderOverride) apply(providerName string) (ProviderOverride, error) {
