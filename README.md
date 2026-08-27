@@ -2,95 +2,90 @@
 
 # Quota Pacer
 
-[中文](./README.md) | [English](./README.en.md)
+[English](./README.md) | [中文](./README.zh.md)
 
 </div>
 
-CLIProxyAPI (CPA) 额度节奏（Pacing）自动调整插件，前身为 credential-priority。插件 ID、动态库基础名与 CPA 配置键均为 `quota-pacer`。
+Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that automatically paces credential priority by fresh quota evidence. The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
 
-<div align="center">
-  <img src="./picture/密钥验证页.png" alt="密钥验证页" width="32%" />
-  <img src="./picture/概览页.png" alt="概览页" width="32%" />
-  <img src="./picture/配置页.png" alt="配置页" width="32%" />
-</div>
+## Navigation
 
-## 导航
+- [Overview](#overview)
+- [Workflow](#workflow)
+- [PacingScore Algorithm](#pacingscore-algorithm)
+- [Build and Installation](#build-and-installation)
+- [Plugin Store Source](#plugin-store-source)
+- [Configuration](#configuration)
+- [Management Page and API](#management-page-and-api)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
 
-- [功能概览](#功能概览)
-- [工作流程](#工作流程)
-- [PacingScore 算法](#pacingscore-算法)
-- [构建与安装](#构建与安装)
-- [插件商店来源](#插件商店来源)
-- [配置说明](#配置说明)
-- [管理页面与接口](#管理页面与接口)
-- [致谢](#致谢)
-- [许可证](#许可证)
+## Overview
 
-## 功能概览
+- Reuses CPA credential, proxy, and write-back flows through `host.auth.list`, `host.auth.get`, `host.auth.get_runtime`, and `host.auth.save`.
+- Generates priority changes only from fresh and ready evidence collected in the current run.
+- Currently supports Antigravity, Codex, and xAI credentials; additional providers may be added later.
+- Provider rules are independent: Antigravity, Codex, and xAI do not share depletion behavior.
+- Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
+- **Automatic priority and rules** are edited via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.quota-pacer`.
+- **Plugin page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual apply (management routes). **It does not save config on the plugin page.**
 
-- 通过宿主回调 `host.auth.list`、`host.auth.get`、`host.auth.get_runtime`、`host.auth.save` 复用 CPA 的凭证、代理和写入链路。
-- 只对本轮最新且可用的探测证据生成排序变更，避免用过期缓存调整凭证状态。
-- 当前支持 Antigravity、Codex 与 xAI 凭证；后续可扩展其他提供商配置。
-- 不同提供商的排序规则彼此独立，Antigravity、Codex 与 xAI 不共享额度耗尽策略。
-- 状态页、诊断、快照与日志只输出脱敏后的凭证信息。
-- **自动优先级与规则**通过 CPA **插件管理可视化配置字段**（`ConfigFields`）编辑；也可直接改 `config.yaml` / `plugins.configs.quota-pacer`。
-- **插件页**支持 Management Key 验证、概览（只读生效配置）、执行记录（近 5 次）、帮助，以及手动 apply（management 路径）；**不在插件页内保存配置**。
-
-## 工作流程
+## Workflow
 
 ```text
-加载插件
-  -> 读取 plugins.configs.quota-pacer 配置
-  -> 通过 host.auth.list 获取 CPA 凭证列表
-  -> 按 provider_scope（all 或 antigravity|codex|claude|xai）筛选当前支持的提供商
-       - Antigravity：按所选模型组探测剩余额度
-       - Codex：按账号计划与额度状态探测可用性
-       - Claude：按会话/5 小时重置窗口探测可用性与配额
-        - xAI：FetchPlan（settings / billing / JWT）识别 free/paid；auto 不再 chat 多模型探额度
-             业务额度由 usage.handle 累计；30 分钟内 2 次 429 → free 软禁用；401 AuthInvalid → 硬禁用
-             Free 默认不参与优先级排序（free_participates_priority 默认 false）
-  -> 只使用本轮最新且可用的探测证据生成排序计划
-  -> 根据运行模式决定是否写回
-       - apply：通过 host.auth.save 写回优先级与启用状态
-       - preview：仅更新状态、诊断、快照与日志
-  -> 在管理页面展示脱敏后的统计、审计摘要与排序结果
+Load plugin
+  -> Read plugins.configs.quota-pacer config
+  -> Fetch CPA credential list through host.auth.list
+  -> Filter currently supported providers by provider_scope (all or antigravity|codex|claude|xai)
+       - Antigravity: probe remaining quota for the selected model group
+       - Codex: probe availability by account plan and quota state
+       - Claude: probe availability and remaining quota by session / 5-hour reset window
+        - xAI: FetchPlan (settings / billing / JWT) classifies free/paid; auto no longer multi-model chat probes
+             Business quota via usage.handle; 2×429 within 30 minutes → free soft-disable; 401 AuthInvalid → hard-disable
+             Free does not join priority sorting by default (`free_participates_priority` default false)
+  -> Build a sorting plan only from fresh and ready evidence in this run
+  -> Decide whether to write back by run mode
+       - apply: write priority and enabled state through host.auth.save
+       - preview: update status, diagnostics, snapshot, and logs only
+  -> Show redacted statistics, audit summary, and sorting result on the management page
 ```
 
-## PacingScore 算法
+## PacingScore Algorithm
 
-排序不再依赖固定阈值或提权规则，核心是一个无量纲的节奏健康度评分，用于在所有提供商、所有账号之间做统一的全局比较：
+Sorting no longer relies on fixed thresholds or boost rules. The core is a dimensionless pacing-health score used to compare every account, across every provider, on one global scale:
 
 ```
-PacingScore = 剩余额度百分比 ÷ 剩余时间百分比
+PacingScore = Remaining Quota % ÷ Remaining Time %
 ```
 
-- **剩余额度百分比**：本轮探测得到的 `Remaining`（0-100）。探测失败或额度为 0 时得分直接为 0，账号自动沉底，不需要额外的"耗尽"判断分支。
-- **剩余时间百分比**：距离配额重置的剩余时间 ÷ 所属周期总长度，裁剪到 `[0.001, 1.0]`（重置时间已过但证据未刷新时同样取下限，得分被放大）。周期总长度的判定：
-  - 探测到长周期重置时间（如 OAuth 周长窗 `LongWindowResetAt`）时固定为 7 天；
-  - 否则按短周期重置时间（`ResetAt`）距今的剩余时长动态归类：> 48 小时按 7 天算，6-48 小时按 24 小时算，< 6 小时按 5 小时算（对应 Claude / Codex 常见的会话级窗口）；
-  - 完全没有重置时间证据时，退化为只用剩余额度百分比排序。
+- **Remaining Quota %**: the `Remaining` value (0-100) probed in this run. A failed probe or zero remaining quota scores 0 directly, so the account automatically sinks to the bottom — no separate "depleted" branch needed.
+- **Remaining Time %**: time left until quota reset ÷ the inferred window length, clamped to `[0.001, 1.0]` (a reset time that has already passed but hasn't refreshed yet also hits the floor, amplifying the score). The window length is inferred as follows:
+  - If a long-window reset time is probed (e.g. an OAuth weekly window, `LongWindowResetAt`), the window is fixed at 7 days.
+  - Otherwise it falls back to the short-window reset time (`ResetAt`) and infers the window from how much time remains: > 48h → 7-day window, 6-48h → 24-hour window, < 6h → 5-hour window (matching the session-level windows common to Claude/Codex).
+  - With no reset-time evidence at all, it falls back to sorting by remaining quota % alone.
+- **Full-quota override**: if `Remaining >= 100` in the current run, the account scores at the same ceiling as a just-reset account, skipping the remaining-time ratio entirely. This applies across all providers. Some accounts don't start their real billing window immediately after a quota cycle resets — the window only begins ticking once the account first consumes at 100% remaining. Without this override, a freshly-reset, still-inactive account would score near the global minimum and sit idle indefinitely; prioritizing it instead gets that cycle moving.
 
-得分越高，说明这个账号"额度消耗进度落后于时间流逝进度"（用得比预期慢），应优先分配流量去消耗；得分 < 1 则说明消耗过快，应压低优先级。因为是两个百分比的比值，不同提供商即使配额语义完全不同（Antigravity 的模型组配额、Codex/Claude 的套餐窗口、xAI 的周/月限额），也能直接放在同一条全局优先级队列里比较，无需为每个提供商单独设计打分标准。
+A higher score means the account's quota consumption is lagging behind time elapsed (it's being used more slowly than expected), so it should get more traffic; a score below 1 means it's burning too fast and should be throttled back. Because it's a ratio of two percentages, accounts can be compared on one global priority queue even when quota semantics differ completely across providers (Antigravity's model-group quota, Codex/Claude's plan windows, xAI's weekly/monthly caps) — no per-provider scoring rule required.
 
-## 构建与安装
+## Build and Installation
 
-插件以 CGO 动态库形式运行，宿主会从动态库文件名去掉扩展名得到插件 ID，因此文件名必须保持为 `quota-pacer.<ext>`。
+The plugin runs as a CGO dynamic library. CPA derives the plugin ID from the dynamic library filename, so the filename must stay `quota-pacer.<ext>`.
 
 ```bash
 go build -buildmode=c-shared -o quota-pacer.so .
 ```
 
-把产物放入 CPA 插件发现目录之一：
+Place the artifact in one of the CPA plugin discovery directories:
 
 - `plugins/<GOOS>/<GOARCH>/quota-pacer.<ext>`
 - `plugins/<GOOS>/<GOARCH>-<variant>/quota-pacer.<ext>`
 - `plugins/quota-pacer.<ext>`
 
-扩展名：Linux/FreeBSD 为 `.so`，macOS 为 `.dylib`，Windows 为 `.dll`。
+Extensions: `.so` on Linux and FreeBSD, `.dylib` on macOS, and `.dll` on Windows.
 
-## 插件商店来源
+## Plugin Store Source
 
-如需通过 CPA 插件商店安装本插件，第三方来源必须指向 `registry.json` 的原始 JSON 文本：
+To install this plugin through the CPA plugin store, third-party sources must point to the raw JSON text of `registry.json`:
 
 ```yaml
 plugins:
@@ -99,11 +94,11 @@ plugins:
     - "https://raw.githubusercontent.com/xg1990/quota-pacer/main/registry.json"
 ```
 
-不要使用 `https://github.com/xg1990/quota-pacer/blob/main/registry.json`。该地址返回 GitHub HTML 页面，CPA 无法按插件商店 registry 解析。修改 `store-sources` 后，重启 CPA 或通过管理端重新加载配置，再刷新插件商店列表。
+Do not use `https://github.com/xg1990/quota-pacer/blob/main/registry.json`. That URL returns a GitHub HTML page, which CPA cannot parse as a plugin store registry. After changing `store-sources`, restart CPA or reload configuration through the management UI, then refresh the plugin store list.
 
-## 配置说明
+## Configuration
 
-在 CPA `config.yaml` 中启用插件系统，并在 `plugins.configs.quota-pacer` 下保留插件自有配置：
+Enable the CPA plugin system and keep plugin-owned fields under `plugins.configs.quota-pacer`:
 
 ```yaml
 plugins:
@@ -114,7 +109,7 @@ plugins:
       enabled: true
       priority: 10
       auto_apply: false
-      provider_scope: "all"   # 或 "antigravity|codex|claude|xai"
+      provider_scope: "all"   # or "antigravity|codex|claude|xai"
       antigravity_model_group: "gemini"
       priority_rules:
         enabled: false
@@ -135,106 +130,104 @@ plugins:
           monthly_and_weekly_depleted_disabled: true
 ```
 
-字段说明：
-
-| 字段 | 说明 |
+| Field | Description |
 | :--- | :--- |
-| `enabled` | 单插件开关；还需要全局 `plugins.enabled: true` 且动态库注册成功。与 `priority_rules.enabled` 语义独立。 |
-| `priority` | CPA 宿主加载与执行插件的顺序，数值越大优先级越高。 |
-| `auto_apply` | 是否由定时器自动执行并写回排序结果，默认 `false`。 |
-| `provider_scope` | `all` 处理全部当前支持的提供商；也可填单个或多个提供商，多个用 `\|` 分隔，例如 `antigravity\|codex\|claude\|xai`。兼容旧配置 `selected` + `selected_providers`。 |
-| `antigravity_model_group` | Antigravity 配额模型组，支持 `gemini` 与 `claude_gpt`。 |
-| `priority_rules.enabled` | 是否启用自定义排序规则；关闭时使用内置排序策略。与顶层 `enabled` 独立。 |
-| `interval` | 自动排序/探测分批时间步长（默认 15m）。disabled 凭证分批递进也使用该间隔（不再使用固定 1h 冷冻）。 |
-| `immediate_probe_limit` / `active_group_size` | 控制本轮立即探测数量与 active 分批大小；disabled 分批组大小与 active 共用 `active_group_size`。 |
+| `enabled` | Per-plugin switch. Global `plugins.enabled: true` and successful dynamic library registration are also required. Independent of `priority_rules.enabled`. |
+| `priority` | CPA plugin loading and execution order. Higher values run earlier. |
+| `auto_apply` | Enables scheduled execution and write-back. Default: `false`. |
+| `provider_scope` | `all` handles every currently supported provider; or list one or more providers separated by `\|`, e.g. `antigravity\|codex\|claude\|xai`. Legacy `selected` + `selected_providers` remains supported. |
+| `antigravity_model_group` | Antigravity quota group: `gemini` or `claude_gpt`. |
+| `priority_rules.enabled` | Enables custom priority rules. When disabled, built-in sorting is used. Independent of top-level `enabled`. |
+| `interval` | Auto sort / probe batch step (default 15m). Disabled credentials also batch with this interval (no fixed 1h freeze). |
+| `immediate_probe_limit` / `active_group_size` | Immediate probe count and active batch size; disabled batches share `active_group_size` with active. |
 
-> **配置要点**（用户向）：支持扁平 `priority_rules.*` 配置；优先级完全由跨提供商统一的节奏算法（PacingScore）全局计算，不存在按提供商单独生效的起始优先级。`priority_rules.enabled` 控制额度耗尽等策略字段是否生效。禁用/耗尽凭证不再固定等 1 小时，节奏跟 `interval` 与分批参数走。临近额度刷新约 24 小时内且仍有额度时优先用完（Antigravity/Codex/Claude 以及 OAuth 付费 xAI 官方周长窗适用，xAI 免费不参与）。
+> **Configuration notes** (user-facing): Flat `priority_rules.*` keys are supported. Priority is determined entirely by the global, cross-provider pacing algorithm (PacingScore); there is no per-provider start-priority override. `priority_rules.enabled` controls whether depletion-related policy fields take effect. Disabled/depleted accounts no longer wait a fixed 1 hour—pacing follows `interval` and batch settings. Within ~24h of a quota reset, accounts with remaining quota are preferred (Antigravity/Codex/Claude and OAuth paid xAI weekly long-windows included; xAI free excluded). Accounts probed at 100% remaining are always prioritized first, regardless of provider.
 
-### 提供商独立排序规则
+### Provider-Independent Rules
 
-Antigravity 规则
+Antigravity rules
 
-- 只排序本轮成功获取到所选模型组配额的 Antigravity 凭证。
-- 配额获取失败或剩余额度不可用时保留当前优先级与启用状态。
+- Only credentials with fresh quota evidence for the selected Antigravity model group are sorted.
+- Failed quota fetches and unavailable remaining quota keep the current priority and enabled state.
 
-Codex 规则
+Codex rules
 
-- `priority_rules.codex.free_depleted_priority`：Free 凭证额度为 0 时写入的优先级，默认 `-1`。
-- `priority_rules.codex.free_depleted_disabled`：Free 凭证额度为 0 时是否禁用，默认 `true`。
-- `priority_rules.codex.paid_depleted_disabled`：Plus、Pro、Team 额度耗尽时是否禁用；`true`=禁用，`false`=保持启用，默认 `false`。兼容旧键 `paid_depleted_keeps_enabled`（语义取反）。
+- `priority_rules.codex.free_depleted_priority`: priority for depleted Free credentials. Default: `-1`.
+- `priority_rules.codex.free_depleted_disabled`: disables depleted Free credentials. Default: `true`.
+- `priority_rules.codex.paid_depleted_disabled`: disable Plus/Pro/Team when depleted; `true`=disable, `false`=keep enabled. Default: `false`. Legacy `paid_depleted_keeps_enabled` is still accepted (inverted).
 
-Claude 规则
+Claude rules
 
-- `priority_rules.claude.free_depleted_priority`：Free 凭证额度为 0 时写入的优先级，默认 `-1`。
-- `priority_rules.claude.free_depleted_disabled`：Free 凭证额度为 0 时是否禁用，默认 `true`。
-- `priority_rules.claude.paid_depleted_disabled`：Pro、Team 额度耗尽时是否禁用；`true`=禁用，`false`=保持启用，默认 `false`。
+- `priority_rules.claude.free_depleted_priority`: priority for depleted Free credentials. Default: `-1`.
+- `priority_rules.claude.free_depleted_disabled`: disables depleted Free credentials. Default: `true`.
+- `priority_rules.claude.paid_depleted_disabled`: disable Pro/Team when depleted; `true`=disable, `false`=keep enabled. Default: `false`.
 
-xAI 规则
+xAI rules
 
-**套餐识别（FetchPlan）**
+**Plan classification (FetchPlan)**
 
-- 通过 settings / billing / JWT tier 轻量分类套餐为 `free` 或 `paid`，**auto 不再**对 chat 多模型探额度。
-- 无法识别（网络失败、404、无套餐字段等）时**默认 `free`**；仅在明确付费 product/tier 时标 `paid`。
-- **Free 排序默认关闭**：`free_participates_priority` 默认 `false`，Free 不参与正优先级提升 / free-first / uniqueness 重排。
-- 仅当显式设置 `priority_rules.xai.free_participates_priority: true` 时，可参与排序的 free 才优先于 paid（优先消耗 free）。
+- Classifies the plan as `free` or `paid` via settings / billing / JWT tier — **auto no longer** multi-model chat probes for quota.
+- Unfetchable results (network failure, 404, missing plan fields, etc.) default to **`free`**; only explicit paid product/tier signals mark **`paid`**.
+- **Free sorting is off by default**: `free_participates_priority` defaults to `false` — Free does not join positive priority promotion / free-first / uniqueness reordering.
+- Only with explicit `priority_rules.xai.free_participates_priority: true` do eligible free credentials sort above paid (consume free first).
 
-**free 额度与 24h 锚点（与排序开关独立）**
+**Free quota and 24h anchor (independent of the sorting switch)**
 
-- 业务额度由宿主 `usage.handle` 累计，不依赖 chat 探测。
-- **30 分钟内累计 2 次** 429 → `priority=-1` **软禁用**（仅降优先级）；与 free 是否参与排序无关，默认仍生效。
-- `free_depleted_disabled` 默认 `false`（软禁用，不硬 `disabled`）；显式设为 `true` 时才硬禁用。
-- 冷却锚点：`first_success_at + 24h`（若无成功记录则用触发耗尽的失败时刻 + 24h）；到期后可恢复。
+- Business quota is accumulated from host `usage.handle`, not from chat probes.
+- **2×429 within 30 minutes** → `priority=-1` **soft-disable** (lower priority only); independent of whether Free joins sorting; still applies by default.
+- `free_depleted_disabled` defaults to `false` (soft-disable, no hard `disabled`); set `true` only for hard disable.
+- Cooldown anchor: `first_success_at + 24h` (or the depleting failure time + 24h if no success yet); after that, recovery can resume.
 
-**401 AuthInvalid（硬禁用）**
+**401 AuthInvalid (hard disable)**
 
-- OAuth force 刷新后仍 401 / 凭证失效文案 → `priority=-1` 且 `disabled=true` 硬禁用。
-- 硬禁用后需用户**重新登录**恢复；不计入 free 额度失败次数。
+- Still 401 / credential-invalid text after OAuth force refresh → `priority=-1` and `disabled=true` hard disable.
+- Requires user **re-login** to recover; does not count toward free quota failure streak.
 
-**配置字段**
+**Config fields**
 
-- `priority_rules.xai.free_depleted_priority`：免费额度耗尽（软禁用）时写入的优先级，默认 `-1`。
-- `priority_rules.xai.free_depleted_disabled`：免费额度耗尽时是否硬禁用，默认 `false`（软禁用：仅降 priority）。
-- `priority_rules.xai.free_participates_priority`：Free 是否参与正优先级排序 / free-first，默认 `false`；显式 `true` 才 opt-in。关闭时不影响 429 耗尽、冷却与 401。
-- `priority_rules.xai.weekly_depleted_priority`：仅周限额耗尽时写入的优先级，默认 `-1`（不禁用）。
-- `priority_rules.xai.monthly_and_weekly_depleted_priority`：周与月均耗尽时写入的优先级，默认 `-1`。
-- `priority_rules.xai.monthly_and_weekly_depleted_disabled`：周与月均耗尽时是否禁用，默认 `true`。
+- `priority_rules.xai.free_depleted_priority`: priority when free usage is depleted (soft-disable). Default: `-1`.
+- `priority_rules.xai.free_depleted_disabled`: hard-disables free usage depleted credentials. Default: `false` (soft-disable: lower priority only).
+- `priority_rules.xai.free_participates_priority`: whether Free joins positive priority sorting / free-first. Default: `false`; set `true` to opt in. When false, 429 depletion, cooldown, and 401 are unchanged.
+- `priority_rules.xai.weekly_depleted_priority`: priority when only weekly limit is depleted. Default: `-1` (not disabled).
+- `priority_rules.xai.monthly_and_weekly_depleted_priority`: priority when monthly and weekly are depleted. Default: `-1`.
+- `priority_rules.xai.monthly_and_weekly_depleted_disabled`: disables when monthly and weekly are depleted. Default: `true`.
 
-## 管理页面与接口
+## Management Page and API
 
-插件通过 `management.register` 分别注册 **resources**（静态壳）与 **routes**（动态业务）。
+The plugin registers **resources** (static shell) and **routes** (dynamic APIs) via `management.register`.
 
-### 产品边界
+### Product boundary
 
-| 能力 | 入口 | 说明 |
+| Capability | Entry | Notes |
 | :--- | :--- | :--- |
-| 自动优先级与规则配置 | CPA 插件管理可视化字段（推荐）或 `config.yaml` | `auto_apply`、`provider_scope`（all 或 a\|b\|c）、`interval`、`priority_rules.*` 等 |
-| 插件资源页 | `/v0/resource/plugins/quota-pacer/status` | 静态 HTML：Key 验证 + 概览/执行记录/帮助 + 手动排序 |
-| 手动 apply | `/v0/management/plugins/quota-pacer/run` | 需要 Management Key |
-| 只读配置 | 宿主 `GET /v0/management/plugins/quota-pacer/config` | 插件页只读展示，不在插件页 PATCH |
+| Automatic priority and rules | CPA Plugin Manager visual fields (recommended) or `config.yaml` | `auto_apply`, `provider_scope` (all or a\|b\|c), `interval`, `priority_rules.*`, etc. |
+| Resource page | `/v0/resource/plugins/quota-pacer/status` | Static HTML: key verify + overview / run history / help + manual sort |
+| Manual apply | `/v0/management/plugins/quota-pacer/run` | Requires Management Key |
+| Read-only config | Host `GET /v0/management/plugins/quota-pacer/config` | Display only; no plugin-page PATCH |
 
-### 资源页面（静态）
+### Resource page (static)
 
 - `GET /v0/resource/plugins/quota-pacer/status`
-  返回静态 HTML 壳。浏览器侧用 Management Key 拉取只读数据与执行记录，并调用 management 路径手动排序。**无插件页内配置保存控件。**
+  Returns a static HTML shell. The browser uses the Management Key for read-only data, run history, and management-path manual runs. **No in-page config save controls.**
 
-### 管理 API（动态，需密钥）
+### Management API (dynamic, key required)
 
 - `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider_scope=all&antigravity_model_group=gemini`
-  手动触发探测、规划并写回凭证优先级。
+  Manual probe, plan, and write-back of credential priorities.
 - `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider=antigravity&antigravity_model_group=claude_gpt`
-  只处理 Antigravity 凭证并使用 Claude/GPT 模型组。
+  Handles only Antigravity credentials with the Claude/GPT model group.
 - `POST /v0/management/plugins/quota-pacer/run?mode=apply&provider=codex`
-  只处理 Codex 凭证。
+  Handles only Codex credentials.
 - `GET /v0/management/plugins/quota-pacer/diagnostics`
-  导出脱敏诊断信息。
+  Exports redacted diagnostics.
 - `GET /v0/management/plugins/quota-pacer/snapshot/latest`
-  获取最近一次运行的脱敏决策快照。
+  Returns the latest redacted decision snapshot.
 
-## 致谢
+## Acknowledgments
 
-- 本项目最初 fork 自 [Cody292/credential-priority](https://github.com/Cody292/credential-priority)，感谢原作者搭建的插件骨架与提供商探测逻辑。
-- 感谢 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) 提供的插件宿主平台（`host.auth.*` 回调、Management Key 校验、热加载等能力），使本插件可以专注于节奏调度算法本身。
+- This project was originally forked from [Cody292/credential-priority](https://github.com/Cody292/credential-priority) — thanks to the original author for the plugin scaffold and provider-probing logic.
+- Thanks to [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) for the host plugin platform (`host.auth.*` callbacks, Management Key verification, hot-reload, and more), which let this plugin focus purely on the pacing algorithm.
 
-## 许可证
+## License
 
-本项目使用 MIT License，详见 [LICENSE](./LICENSE)。
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).
