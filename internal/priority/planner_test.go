@@ -410,6 +410,75 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 	}
 }
 
+func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
+	now := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
+
+	// 刚重置的满额账号：周期还有整整 7 天，按旧公式 score = 1.0/1.0 = 1.0（全局最低档之一）。
+	resetFull := now.Add(168 * time.Hour)
+	remFull := int64(100)
+
+	// 即将过期但仍有较多剩余额度的账号：按旧公式 score = 0.9/(2/168) ≈ 75.6，旧逻辑下排名最高。
+	resetUrgent := now.Add(2 * time.Hour)
+	remUrgent := int64(90)
+
+	credentials := []core.Credential{
+		{Name: "claude-full", AuthIndex: "auth-full", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		{Name: "codex-urgent", AuthIndex: "auth-urgent", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:          core.ProviderClaude,
+			AuthIndex:         "auth-full",
+			ObservedAt:        now,
+			ResetAt:           &resetFull,
+			LongWindowResetAt: &resetFull,
+			Remaining:         &remFull,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+		{
+			Provider:          core.ProviderCodex,
+			AuthIndex:         "auth-urgent",
+			ObservedAt:        now,
+			ResetAt:           &resetUrgent,
+			LongWindowResetAt: &resetUrgent,
+			Remaining:         &remUrgent,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+	}
+
+	options := Options{
+		Now:         now,
+		MaxPriority: 100,
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, options)
+	if len(plan.Items) != 2 {
+		t.Fatalf("expected 2 plan items, got %d", len(plan.Items))
+	}
+
+	priorityByAuth := make(map[string]int)
+	for _, item := range plan.Items {
+		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+	}
+
+	// 满额账号必须排在第一位，避免"周期未激活"的账号长期闲置。
+	if p := priorityByAuth["auth-full"]; p != 100 {
+		t.Errorf("expected auth-full priority 100, got %d", p)
+	}
+	if p := priorityByAuth["auth-urgent"]; p != 99 {
+		t.Errorf("expected auth-urgent priority 99, got %d", p)
+	}
+}
+
 func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	resetWeekly := now.Add(168 * time.Hour)

@@ -663,6 +663,12 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 	}
 	remainingRatio := float64(*item.Remaining) / 100.0
 
+	// 满额（Remaining=100%）账号优先处理：部分账号在额度周期 reset 后不会立即激活，
+	// 真实计费窗口从首次消费才开始计时，此时按剩余时间比例计分会把它们排到最后。
+	if *item.Remaining >= 100 {
+		return remainingRatio / 0.001
+	}
+
 	// 确定重置时间与所属周期总长度
 	// 优先以周窗口（LongWindowResetAt）为基准；若无则退回短窗口/日窗口（ResetAt）
 	var resetAt *time.Time
