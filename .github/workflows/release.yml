@@ -115,7 +115,7 @@ jobs:
           archive="${PLUGIN_NAME}_${version}_${{ matrix.goos }}_${{ matrix.goarch }}.zip"
           mkdir -p dist package
           CGO_ENABLED=1 GOTOOLCHAIN=auto GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w -X quota-pacer/internal/config.PluginVersion=${version}" \
             -o "package/${PLUGIN_NAME}.${{ matrix.ext }}" .
           (cd package && zip -q "../dist/${archive}" "${PLUGIN_NAME}.${{ matrix.ext }}")
 
@@ -180,7 +180,7 @@ jobs:
 
           mkdir -p package
           CGO_ENABLED=1 GOTOOLCHAIN=auto GOOS=windows GOARCH=amd64 CC=gcc \
-            go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w -X quota-pacer/internal/config.PluginVersion=${version}" \
             -o "package/${PLUGIN_NAME}.dll" .
 
       - name: Archive package
@@ -252,7 +252,7 @@ jobs:
           CGO_ENABLED=1 GOTOOLCHAIN=auto GOOS=windows GOARCH=arm64 \
             CC="zig cc -target aarch64-windows-gnu" \
             CXX="zig c++ -target aarch64-windows-gnu" \
-            go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+            go build -buildmode=c-shared -trimpath -ldflags="-s -w -X quota-pacer/internal/config.PluginVersion=${version}" \
             -o "package/${PLUGIN_NAME}.dll" .
           (cd package && zip -q "../dist/${archive}" "${PLUGIN_NAME}.dll")
 
@@ -311,7 +311,7 @@ jobs:
             archive="${PLUGIN_NAME}_${version}_freebsd_amd64.zip"
             mkdir -p dist package
             CGO_ENABLED=1 GOTOOLCHAIN=auto GOOS=freebsd GOARCH=amd64 \
-              go build -buildmode=c-shared -trimpath -ldflags="-s -w" \
+              go build -buildmode=c-shared -trimpath -ldflags="-s -w -X quota-pacer/internal/config.PluginVersion=${version}" \
               -o "package/${PLUGIN_NAME}.so" .
             (cd package && zip -q "../dist/${archive}" "${PLUGIN_NAME}.so")
 

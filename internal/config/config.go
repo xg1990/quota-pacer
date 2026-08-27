@@ -22,6 +22,10 @@ const (
 	DefaultStateCachePath = DirectoryName + "/refresh-cache.json"
 )
 
+// PluginVersion 通过 release 构建时的 ldflags -X 注入实际发布版本号；
+// 本地未注入构建（go build/go test）时保持 "dev"，避免与 registry.json 手动维护的版本号脱节。
+var PluginVersion = "dev"
+
 // ErrInvalidConfig 标识配置解析或校验失败。
 var ErrInvalidConfig = errors.New("config: invalid")
 

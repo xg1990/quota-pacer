@@ -173,7 +173,7 @@ func registrationResult() RegisterResult {
 		SchemaVersion: 1,
 		Metadata: Metadata{
 			Name:             config.PluginID,
-			Version:          "1.0.3",
+			Version:          config.PluginVersion,
 			Author:           "CPA Plugins",
 			GitHubRepository: "https://github.com/xg1990/quota-pacer",
 			Description:      "Fresh evidence based credential quota-pacing management API.",
