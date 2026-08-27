@@ -49,10 +49,13 @@ type claudeWindow struct {
 }
 
 type effectiveWindow struct {
-	resetAt           *time.Time
-	remaining         int64
-	windowType        WindowType
-	longWindowResetAt *time.Time
+	resetAt              *time.Time
+	remaining            int64
+	windowType           WindowType
+	longWindowResetAt    *time.Time
+	shortWindowRemaining *int64
+	shortWindowResetAt   *time.Time
+	longWindowRemaining  *int64
 }
 
 // ParseClaudeUsage 将 Claude 响应 JSON 与 Headers 解析为可信额度 fresh probe 结果。
@@ -119,7 +122,7 @@ func ParseClaudeUsage(raw []byte, headers host.Header, observedAt time.Time) Pro
 		if orgUUID == "" {
 			orgUUID = orgUUIDFromHeader
 		}
-		return makeReadyResult(observedAt, &defaultReset, 100, WindowWeekly, &defaultReset, planType, orgUUID)
+		return makeReadyResult(observedAt, &defaultReset, 100, WindowWeekly, &defaultReset, planType, orgUUID, nil, nil, nil)
 	}
 
 	return failedResult(observedAt, "trusted claude quota window unavailable")
@@ -134,7 +137,7 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 
 	if usage.RateLimits != nil {
 		if win, ok := pickFromRateLimits(*usage.RateLimits, observedAt); ok {
-			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID), true
+			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID, win.shortWindowRemaining, win.shortWindowResetAt, win.longWindowRemaining), true
 		}
 	}
 
@@ -146,7 +149,7 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 			Daily:        usage.Daily,
 		}
 		if win, ok := pickFromRateLimits(limits, observedAt); ok {
-			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID), true
+			return makeReadyResult(observedAt, win.resetAt, win.remaining, win.windowType, win.longWindowResetAt, planType, orgUUID, win.shortWindowRemaining, win.shortWindowResetAt, win.longWindowRemaining), true
 		}
 	}
 
@@ -168,7 +171,7 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 				if usage.Weekly != nil && hasWindowData(*usage.Weekly) {
 					longReset = windowResetTime(observedAt, *usage.Weekly)
 				}
-				return makeReadyResult(observedAt, resetAt, remaining, candidate.wtyp, longReset, planType, orgUUID), true
+				return makeReadyResult(observedAt, resetAt, remaining, candidate.wtyp, longReset, planType, orgUUID, nil, nil, nil), true
 			}
 		}
 	}
@@ -176,19 +179,22 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 	return ProbeResult{}, false
 }
 
-func makeReadyResult(observedAt time.Time, resetAt *time.Time, remaining int64, winType WindowType, longReset *time.Time, planType core.PlanType, orgUUID string) ProbeResult {
+func makeReadyResult(observedAt time.Time, resetAt *time.Time, remaining int64, winType WindowType, longReset *time.Time, planType core.PlanType, orgUUID string, shortRem *int64, shortReset *time.Time, longRem *int64) ProbeResult {
 	return ProbeResult{
-		Provider:          core.ProviderClaude,
-		ObservedAt:        observedAt.UTC(),
-		ResetAt:           resetAt,
-		Remaining:         int64Ptr(remaining),
-		Window:            winType,
-		LongWindowResetAt: longReset,
-		Freshness:         core.FreshnessFresh,
-		ProbeStatus:       core.ProbeStatusReady,
-		Status:            StatusReady,
-		PlanType:          planType,
-		OrganizationUUID:  orgUUID,
+		Provider:             core.ProviderClaude,
+		ObservedAt:           observedAt.UTC(),
+		ResetAt:              resetAt,
+		Remaining:            int64Ptr(remaining),
+		Window:               winType,
+		LongWindowResetAt:    longReset,
+		ShortWindowRemaining: shortRem,
+		ShortWindowResetAt:   shortReset,
+		LongWindowRemaining:  longRem,
+		Freshness:            core.FreshnessFresh,
+		ProbeStatus:          core.ProbeStatusReady,
+		Status:               StatusReady,
+		PlanType:             planType,
+		OrganizationUUID:     orgUUID,
 	}
 }
 
@@ -222,16 +228,35 @@ func pickFromRateLimits(limits claudeRateLimits, observedAt time.Time) (effectiv
 
 	if okFive && okWeek && fiveHourReset != nil && weeklyReset != nil {
 		if weeklyRem <= 0 {
-			return effectiveWindow{resetAt: weeklyReset, remaining: 0, windowType: WindowWeekly, longWindowResetAt: weeklyReset}, true
+			return effectiveWindow{
+				resetAt:              weeklyReset,
+				remaining:            0,
+				windowType:           WindowWeekly,
+				longWindowResetAt:    weeklyReset,
+				shortWindowRemaining: int64Ptr(fiveHourRem),
+				shortWindowResetAt:   fiveHourReset,
+				longWindowRemaining:  int64Ptr(weeklyRem),
+			}, true
 		}
 		if fiveHourRem <= 0 {
-			return effectiveWindow{resetAt: fiveHourReset, remaining: 0, windowType: WindowFiveHour, longWindowResetAt: weeklyReset}, true
+			return effectiveWindow{
+				resetAt:              fiveHourReset,
+				remaining:            0,
+				windowType:           WindowFiveHour,
+				longWindowResetAt:    weeklyReset,
+				shortWindowRemaining: int64Ptr(fiveHourRem),
+				shortWindowResetAt:   fiveHourReset,
+				longWindowRemaining:  int64Ptr(weeklyRem),
+			}, true
 		}
 		return effectiveWindow{
-			resetAt:           weeklyReset,
-			remaining:         weeklyRem,
-			windowType:        WindowWeekly,
-			longWindowResetAt: weeklyReset,
+			resetAt:              weeklyReset,
+			remaining:            weeklyRem,
+			windowType:           WindowWeekly,
+			longWindowResetAt:    weeklyReset,
+			shortWindowRemaining: int64Ptr(fiveHourRem),
+			shortWindowResetAt:   fiveHourReset,
+			longWindowRemaining:  int64Ptr(weeklyRem),
 		}, true
 	}
 	if okWeek && weeklyReset != nil {
@@ -384,7 +409,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(7 * 24 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	if status5h == "rejected" || (hasUtil5h && util5h >= 1.0) {
@@ -396,7 +421,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(5 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	if unifiedStatus == "rejected" {
@@ -411,7 +436,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(5 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	// 2. 同时存在 7d 与 5h utilization：7d 决定账户总体周剩余额度，5h 为短期窗口
@@ -425,7 +450,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 				t := observedAt.UTC().Add(7 * 24 * time.Hour)
 				resetAt = &t
 			}
-			return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID), true
+			return makeReadyResult(observedAt, resetAt, 0, WindowWeekly, reset7d, planType, orgUUID, int64Ptr(remaining5h), reset5h, int64Ptr(remaining7d)), true
 		}
 		if remaining5h <= 0 {
 			resetAt := reset5h
@@ -433,7 +458,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 				t := observedAt.UTC().Add(5 * time.Hour)
 				resetAt = &t
 			}
-			return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID), true
+			return makeReadyResult(observedAt, resetAt, 0, WindowFiveHour, reset7d, planType, orgUUID, int64Ptr(remaining5h), reset5h, int64Ptr(remaining7d)), true
 		}
 
 		resetAt := reset7d
@@ -441,7 +466,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(7 * 24 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID, int64Ptr(remaining5h), reset5h, int64Ptr(remaining7d)), true
 	}
 
 	// 3. 仅存在 7d utilization
@@ -452,7 +477,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(7 * 24 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, remaining7d, WindowWeekly, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	// 4. 仅存在 5h utilization
@@ -463,7 +488,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(5 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, remaining5h, WindowFiveHour, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, remaining5h, WindowFiveHour, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	// 5. 通用 unified utilization
@@ -474,7 +499,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(7 * 24 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, remaining, WindowWeekly, resetUnified, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, remaining, WindowWeekly, resetUnified, planType, orgUUID, nil, nil, nil), true
 	}
 
 	// 6. 仅有 allowed 状态响应头
@@ -490,7 +515,7 @@ func parseUnifiedRateLimitHeaders(headers host.Header, observedAt time.Time) (Pr
 			t := observedAt.UTC().Add(7 * 24 * time.Hour)
 			resetAt = &t
 		}
-		return makeReadyResult(observedAt, resetAt, 100, WindowWeekly, reset7d, planType, orgUUID), true
+		return makeReadyResult(observedAt, resetAt, 100, WindowWeekly, reset7d, planType, orgUUID, nil, nil, nil), true
 	}
 
 	return ProbeResult{}, false

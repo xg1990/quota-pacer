@@ -132,6 +132,16 @@ func TestParseAvailableModels_GoogleQuotaGroups_GeminiWeeklyPriority(t *testing.
 	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(weeklyReset) {
 		t.Errorf("expected LongWindowResetAt %v, got %v", weeklyReset, result.LongWindowResetAt)
 	}
+	fiveHourReset := time.Date(2026, 8, 24, 23, 10, 4, 0, time.UTC)
+	if result.ShortWindowRemaining == nil || *result.ShortWindowRemaining != 95 {
+		t.Errorf("expected ShortWindowRemaining 95, got %v", result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt == nil || !result.ShortWindowResetAt.Equal(fiveHourReset) {
+		t.Errorf("expected ShortWindowResetAt %v, got %v", fiveHourReset, result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 82 {
+		t.Errorf("expected LongWindowRemaining 82, got %v", result.LongWindowRemaining)
+	}
 }
 
 func TestParseAvailableModels_GoogleQuotaGroups_FiveHourDepleted(t *testing.T) {
@@ -172,5 +182,47 @@ func TestParseAvailableModels_GoogleQuotaGroups_FiveHourDepleted(t *testing.T) {
 	}
 	if result.ResetAt == nil || !result.ResetAt.Equal(fiveHourReset) {
 		t.Errorf("expected resetAt %v, got %v", fiveHourReset, result.ResetAt)
+	}
+	if result.ShortWindowRemaining == nil || *result.ShortWindowRemaining != 0 {
+		t.Errorf("expected ShortWindowRemaining 0, got %v", result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt == nil || !result.ShortWindowResetAt.Equal(fiveHourReset) {
+		t.Errorf("expected ShortWindowResetAt %v, got %v", fiveHourReset, result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 82 {
+		t.Errorf("expected LongWindowRemaining 82, got %v", result.LongWindowRemaining)
+	}
+}
+
+func TestParseAvailableModels_SingleWindow_ShortLongFieldsNil(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+
+	payload := `{
+		"models": {
+			"gemini-2.5-pro": {
+				"modelProvider": "google",
+				"quotaInfo": {
+					"remainingFraction": 0.85,
+					"resetTime": "2026-08-20T15:00:00Z"
+				}
+			}
+		}
+	}`
+
+	result := ParseAvailableModels([]byte(payload), observedAt, config.AntigravityModelGroupGemini)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
+	}
+	if result.ShortWindowRemaining != nil {
+		t.Errorf("expected ShortWindowRemaining nil, got %v", *result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt != nil {
+		t.Errorf("expected ShortWindowResetAt nil, got %v", *result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining != nil {
+		t.Errorf("expected LongWindowRemaining nil, got %v", *result.LongWindowRemaining)
+	}
+	if result.LongWindowResetAt != nil {
+		t.Errorf("expected LongWindowResetAt nil, got %v", *result.LongWindowResetAt)
 	}
 }

@@ -8,10 +8,13 @@ import (
 )
 
 type effectiveWindow struct {
-	resetAt           *time.Time
-	remaining         int64
-	windowType        WindowType
-	longWindowResetAt *time.Time
+	resetAt              *time.Time
+	remaining            int64
+	windowType           WindowType
+	longWindowResetAt    *time.Time
+	shortWindowRemaining *int64
+	shortWindowResetAt   *time.Time
+	longWindowRemaining  *int64
 }
 
 type parsedWindow struct {
@@ -39,9 +42,25 @@ func pickPaidWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, boo
 			return effectiveWindow{resetAt: weekly.resetAt, remaining: 0, windowType: WindowWeekly}, true
 		}
 		if fiveHour.remaining <= 0 {
-			return effectiveWindow{resetAt: fiveHour.resetAt, remaining: 0, windowType: WindowFiveHour, longWindowResetAt: weekly.resetAt}, true
+			return effectiveWindow{
+				resetAt:              fiveHour.resetAt,
+				remaining:            0,
+				windowType:           WindowFiveHour,
+				longWindowResetAt:    weekly.resetAt,
+				shortWindowRemaining: int64Ptr(fiveHour.remaining),
+				shortWindowResetAt:   fiveHour.resetAt,
+				longWindowRemaining:  int64Ptr(weekly.remaining),
+			}, true
 		}
-		return effectiveWindow{resetAt: fiveHour.resetAt, remaining: fiveHour.remaining, windowType: WindowFiveHour, longWindowResetAt: weekly.resetAt}, true
+		return effectiveWindow{
+			resetAt:              fiveHour.resetAt,
+			remaining:            fiveHour.remaining,
+			windowType:           WindowFiveHour,
+			longWindowResetAt:    weekly.resetAt,
+			shortWindowRemaining: int64Ptr(fiveHour.remaining),
+			shortWindowResetAt:   fiveHour.resetAt,
+			longWindowRemaining:  int64Ptr(weekly.remaining),
+		}, true
 	}
 	// Codex 取消 5h 限制后：仅 weekly 付费窗口时动态识别为付费额度。
 	if hasWeekly {
@@ -55,7 +74,13 @@ func pickFreeWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, boo
 	if !ok {
 		return effectiveWindow{}, false
 	}
-	return effectiveWindow{resetAt: monthly.resetAt, remaining: monthly.remaining, windowType: WindowMonthly, longWindowResetAt: monthly.resetAt}, true
+	return effectiveWindow{
+		resetAt:             monthly.resetAt,
+		remaining:           monthly.remaining,
+		windowType:          WindowMonthly,
+		longWindowResetAt:   monthly.resetAt,
+		longWindowRemaining: int64Ptr(monthly.remaining),
+	}, true
 }
 
 func pickWindow(usage whamUsage, observedAt time.Time, match func(whamWindow) bool) (parsedWindow, bool) {

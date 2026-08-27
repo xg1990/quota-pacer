@@ -402,6 +402,50 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 	}
 }
 
+func TestPlanFreshOnly_PacingScore_CodexDualWindowMismatch(t *testing.T) {
+	now := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
+
+	// Codex 双窗口场景：Remaining/ResetAt 来自 5 小时窗口（3 小时后重置），
+	// LongWindowResetAt 是不相关的 weekly 窗口（5 天后重置）。必须用 ResetAt
+	// 的启发式分档（3h <= 6h -> 5h 基准）而不是借用 LongWindowResetAt 的 7 天。
+	resetShort := now.Add(3 * time.Hour)
+	resetLong := now.Add(5 * 24 * time.Hour)
+	rem := int64(50)
+
+	credentials := []core.Credential{
+		{Name: "codex-dual", AuthIndex: "auth-codex-dual", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:          core.ProviderCodex,
+			AuthIndex:         "auth-codex-dual",
+			ObservedAt:        now,
+			ResetAt:           &resetShort,
+			LongWindowResetAt: &resetLong,
+			Remaining:         &rem,
+			Freshness:         core.FreshnessFresh,
+			ProbeStatus:       core.ProbeStatusReady,
+			Status:            EvidenceStatusReady,
+			PlanType:          core.PlanTypePro,
+			EvidenceFresh:     true,
+		},
+	}
+
+	options := Options{Now: now, MaxPriority: 100}
+	plan := PlanFreshOnly(credentials, evidence, options)
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+
+	// 期望：score = 0.50 / (3h/5h) ≈ 0.8333。若退化回旧逻辑（无条件 7 天基准）
+	// 会得到 0.50 / (3h/168h) ≈ 28.0，两者差距悬殊，足以捕捉回归。
+	got := plan.Items[0].PacingScore
+	want := 0.5 / (3.0 / 5.0)
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected pacing score %.6f, got %.6f", want, got)
+	}
+}
+
 func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
 	now := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
 
@@ -535,5 +579,170 @@ func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
 	}
 	if p := priorityByAuth["auth-codex-plus"]; p != 99 {
 		t.Errorf("expected codex-plus priority 99, got %d", p)
+	}
+}
+
+func TestPlanFreshOnly_PacingScore_MultiWindow_ShortWindowTighter(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+
+	// 短窗口：10% 剩余，1h 后重置 -> score = 0.10 / (1/5) = 0.50（更紧张）
+	shortReset := now.Add(1 * time.Hour)
+	shortRem := int64(10)
+	// 长窗口：80% 剩余，84h 后重置 -> score = 0.80 / (84/168) = 1.60
+	longReset := now.Add(84 * time.Hour)
+	longRem := int64(80)
+	primaryRem := int64(50) // 主字段仅用于通过顶部短路，不驱动分档
+
+	credentials := []core.Credential{
+		{Name: "codex-multi", AuthIndex: "auth-multi-short", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:             core.ProviderCodex,
+			AuthIndex:            "auth-multi-short",
+			ObservedAt:           now,
+			Remaining:            &primaryRem,
+			ShortWindowRemaining: &shortRem,
+			ShortWindowResetAt:   &shortReset,
+			LongWindowRemaining:  &longRem,
+			LongWindowResetAt:    &longReset,
+			Freshness:            core.FreshnessFresh,
+			ProbeStatus:          core.ProbeStatusReady,
+			Status:               EvidenceStatusReady,
+			PlanType:             core.PlanTypePro,
+			EvidenceFresh:        true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+
+	got := plan.Items[0].PacingScore
+	want := 0.10 / (1.0 / 5.0)
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected pacing score %.6f (short window wins), got %.6f", want, got)
+	}
+}
+
+func TestPlanFreshOnly_PacingScore_MultiWindow_LongWindowTighter(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+
+	// 短窗口：80% 剩余，1h 后重置 -> score = 0.80 / (1/5) = 4.00
+	shortReset := now.Add(1 * time.Hour)
+	shortRem := int64(80)
+	// 长窗口：10% 剩余，84h 后重置 -> score = 0.10 / (84/168) = 0.20（更紧张）
+	longReset := now.Add(84 * time.Hour)
+	longRem := int64(10)
+	primaryRem := int64(50)
+
+	credentials := []core.Credential{
+		{Name: "codex-multi", AuthIndex: "auth-multi-long", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:             core.ProviderCodex,
+			AuthIndex:            "auth-multi-long",
+			ObservedAt:           now,
+			Remaining:            &primaryRem,
+			ShortWindowRemaining: &shortRem,
+			ShortWindowResetAt:   &shortReset,
+			LongWindowRemaining:  &longRem,
+			LongWindowResetAt:    &longReset,
+			Freshness:            core.FreshnessFresh,
+			ProbeStatus:          core.ProbeStatusReady,
+			Status:               EvidenceStatusReady,
+			PlanType:             core.PlanTypePro,
+			EvidenceFresh:        true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+
+	got := plan.Items[0].PacingScore
+	want := 0.10 / (84.0 / 168.0)
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected pacing score %.6f (long window wins), got %.6f", want, got)
+	}
+}
+
+func TestPlanFreshOnly_PacingScore_MultiWindow_LongOnlyFallback(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+
+	// 模拟只上报长窗口数据的场景（如 Codex weekly-only 付费计划）：
+	// ShortWindow* 全为 nil，应走"只有一个窗口分数"分支，不报错。
+	longReset := now.Add(42 * time.Hour)
+	longRem := int64(64)
+	primaryRem := int64(64)
+
+	credentials := []core.Credential{
+		{Name: "codex-weekly-only", AuthIndex: "auth-weekly-only", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:            core.ProviderCodex,
+			AuthIndex:           "auth-weekly-only",
+			ObservedAt:          now,
+			Remaining:           &primaryRem,
+			LongWindowRemaining: &longRem,
+			LongWindowResetAt:   &longReset,
+			Freshness:           core.FreshnessFresh,
+			ProbeStatus:         core.ProbeStatusReady,
+			Status:              EvidenceStatusReady,
+			PlanType:            core.PlanTypePro,
+			EvidenceFresh:       true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+
+	got := plan.Items[0].PacingScore
+	want := 0.64 / (42.0 / 168.0)
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected pacing score %.6f (long-only), got %.6f", want, got)
+	}
+}
+
+func TestPlanFreshOnly_PacingScore_MultiWindow_PrimaryDepletedStillZero(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+
+	// Primary 窗口（Remaining）已耗尽：即使 LongWindowRemaining 很高，也必须直接得 0，
+	// 顶部短路不能被多窗口 min 逻辑绕过。
+	zeroRem := int64(0)
+	longReset := now.Add(100 * time.Hour)
+	longRem := int64(90)
+
+	credentials := []core.Credential{
+		{Name: "codex-depleted", AuthIndex: "auth-depleted", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:            core.ProviderCodex,
+			AuthIndex:           "auth-depleted",
+			ObservedAt:          now,
+			Remaining:           &zeroRem,
+			LongWindowRemaining: &longRem,
+			LongWindowResetAt:   &longReset,
+			Freshness:           core.FreshnessFresh,
+			ProbeStatus:         core.ProbeStatusReady,
+			Status:              EvidenceStatusReady,
+			PlanType:            core.PlanTypePro,
+			EvidenceFresh:       true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+	if got := plan.Items[0].PacingScore; got != 0 {
+		t.Errorf("expected pacing score 0 for depleted primary window, got %.6f", got)
 	}
 }

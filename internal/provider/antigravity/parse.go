@@ -80,6 +80,11 @@ func ParseAvailableModels(raw []byte, observedAt time.Time, group ModelGroup) Pr
 	}
 	if weekly, ok := firstWindow(windows, WindowWeekly); ok {
 		result.LongWindowResetAt = weekly.resetAt
+		result.LongWindowRemaining = int64Ptr(weekly.remaining)
+	}
+	if fiveHour, ok := firstWindow(windows, WindowFiveHour); ok {
+		result.ShortWindowRemaining = int64Ptr(fiveHour.remaining)
+		result.ShortWindowResetAt = fiveHour.resetAt
 	}
 	return result
 }

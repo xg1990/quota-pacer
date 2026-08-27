@@ -50,19 +50,22 @@ const (
 
 // ProbeResult 是 Antigravity fresh probe 的安全输出。
 type ProbeResult struct {
-	Provider          core.Provider
-	AuthIndex         string
-	ModelGroup        ModelGroup
-	ObservedAt        time.Time
-	ResetAt           *time.Time
-	Remaining         *int64
-	Window            WindowType
-	LongWindowResetAt *time.Time
-	Freshness         core.Freshness
-	ProbeStatus       core.ProbeStatus
-	Status            Status
-	PlanType          core.PlanType
-	Error             string
+	Provider             core.Provider
+	AuthIndex            string
+	ModelGroup           ModelGroup
+	ObservedAt           time.Time
+	ResetAt              *time.Time
+	Remaining            *int64
+	Window               WindowType
+	LongWindowResetAt    *time.Time
+	ShortWindowRemaining *int64
+	ShortWindowResetAt   *time.Time
+	LongWindowRemaining  *int64
+	Freshness            core.Freshness
+	ProbeStatus          core.ProbeStatus
+	Status               Status
+	PlanType             core.PlanType
+	Error                string
 }
 
 // ProbeRequest 是执行 Antigravity quota summary fresh probe 所需的认证上下文。

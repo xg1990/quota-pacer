@@ -25,7 +25,12 @@ type ProbeEvidence struct {
 	ResetAt           *time.Time
 	Remaining         *int64
 	LongWindowResetAt *time.Time
-	Freshness         core.Freshness
+	// ShortWindowRemaining/ShortWindowResetAt: 5h 窗口剩余%与 reset 时间（provider 确认时才填）。
+	ShortWindowRemaining *int64
+	ShortWindowResetAt   *time.Time
+	// LongWindowRemaining 与既有 LongWindowResetAt 配对：长/周窗口剩余%。
+	LongWindowRemaining *int64
+	Freshness           core.Freshness
 	ProbeStatus       core.ProbeStatus
 	Status            EvidenceStatus
 	PlanType          core.PlanType
@@ -69,7 +74,12 @@ type PlanItem struct {
 	ResetAt           *time.Time
 	Remaining         *int64
 	LongWindowResetAt *time.Time
-	EvidenceFresh     bool
+	// ShortWindowRemaining/ShortWindowResetAt: 5h 窗口剩余%与 reset 时间（provider 确认时才填）。
+	ShortWindowRemaining *int64
+	ShortWindowResetAt   *time.Time
+	// LongWindowRemaining 与既有 LongWindowResetAt 配对：长/周窗口剩余%。
+	LongWindowRemaining *int64
+	EvidenceFresh       bool
 	// ForceWrite 允许无本轮 fresh 证据的同伴因同 provider 优先级去重而写回宿主。
 	ForceWrite bool
 	Reason     string
@@ -139,6 +149,9 @@ func initialItems(credentials []core.Credential, evidenceByAuthIndex map[string]
 			item.ResetAt = evidence.ResetAt
 			item.Remaining = evidence.Remaining
 			item.LongWindowResetAt = evidence.LongWindowResetAt
+			item.ShortWindowRemaining = evidence.ShortWindowRemaining
+			item.ShortWindowResetAt = evidence.ShortWindowResetAt
+			item.LongWindowRemaining = evidence.LongWindowRemaining
 			item.EvidenceFresh = true
 
 			if isXAIAuthInvalid(credential, evidence) {
@@ -368,13 +381,59 @@ func comparePacingScores(scoreLeft, scoreRight float64) int {
 	return 0
 }
 
-// pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
-// Score = (Remaining Quota %) / (Remaining Time %)
-// 得分越高表示当前额度越富余、或重置时间越临近，应拥有越高优先级。
-func pacingScore(item PlanItem, now time.Time) float64 {
-	if item.Remaining == nil || *item.Remaining <= 0 {
+const shortWindowDuration = 5 * time.Hour
+const longWindowDuration = 7 * 24 * time.Hour
+
+// windowPacingScore 计算单个窗口的 Pacing 健康度子分数（数值语义与原单窗口算法一致）。
+func windowPacingScore(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
+	if remaining <= 0 {
 		return 0
 	}
+	remainingRatio := float64(remaining) / 100.0
+	if remaining >= 100 {
+		return remainingRatio / 0.001
+	}
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return remainingRatio / 0.001
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(duration)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	return remainingRatio / timeRemainingRatio
+}
+
+// pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
+// 优先在所有已知窗口（5h/长周期）中取最紧张（分数最低）的那个；provider 未上报
+// 多窗口数据时（如 xAI）回退到 legacy 单窗口启发式。
+func pacingScore(item PlanItem, now time.Time) float64 {
+	if item.Remaining == nil || *item.Remaining <= 0 {
+		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响
+	}
+
+	scores := make([]float64, 0, 2)
+	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
+		scores = append(scores, windowPacingScore(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
+	}
+	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
+		scores = append(scores, windowPacingScore(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
+	}
+	if len(scores) > 0 {
+		return slices.Min(scores)
+	}
+
+	return legacyPacingScore(item, now)
+}
+
+// legacyPacingScore 是新字段未提供时（xAI 等）的单窗口启发式回退路径。
+func legacyPacingScore(item PlanItem, now time.Time) float64 {
 	remainingRatio := float64(*item.Remaining) / 100.0
 
 	// 满额（Remaining=100%）账号优先处理：部分账号在额度周期 reset 后不会立即激活，
@@ -384,22 +443,25 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 	}
 
 	// 确定重置时间与所属周期总长度
-	// 优先以周窗口（LongWindowResetAt）为基准；若无则退回短窗口/日窗口（ResetAt）
+	// 仅当 LongWindowResetAt 与 ResetAt 指向同一时刻（或 ResetAt 缺失）时，才说明
+	// Remaining 本身就来自这个周窗口，可以用 7 天做基准；否则（如 xAI 日冷却+周账单）
+	// Remaining/ResetAt 来自另一个更短的窗口，绝不能借用 LongWindowResetAt 的时间做
+	// 分母，否则分子分母不是同一个窗口。
 	var resetAt *time.Time
 	var totalWindow time.Duration
 
-	if item.LongWindowResetAt != nil {
+	if item.LongWindowResetAt != nil && (item.ResetAt == nil || item.ResetAt.Equal(*item.LongWindowResetAt)) {
 		resetAt = item.LongWindowResetAt
-		totalWindow = 7 * 24 * time.Hour
+		totalWindow = longWindowDuration
 	} else if item.ResetAt != nil {
 		resetAt = item.ResetAt
 		timeRemaining := resetAt.Sub(now)
 		if timeRemaining > 48*time.Hour {
-			totalWindow = 7 * 24 * time.Hour
+			totalWindow = longWindowDuration
 		} else if timeRemaining > 6*time.Hour {
 			totalWindow = 24 * time.Hour
 		} else {
-			totalWindow = 5 * time.Hour
+			totalWindow = shortWindowDuration
 		}
 	}
 

@@ -51,15 +51,18 @@ func ParseWhamUsage(raw []byte, observedAt time.Time) ProbeResult {
 		return failedResult(observedAt, "trusted quota window unavailable")
 	}
 	return ProbeResult{
-		ObservedAt:        observedAt.UTC(),
-		ResetAt:           result.resetAt,
-		Remaining:         int64Ptr(result.remaining),
-		Window:            result.windowType,
-		LongWindowResetAt: result.longWindowResetAt,
-		Freshness:         core.FreshnessFresh,
-		ProbeStatus:       core.ProbeStatusReady,
-		Status:            StatusReady,
-		PlanType:          inferPlanType(usage.PlanType),
+		ObservedAt:           observedAt.UTC(),
+		ResetAt:              result.resetAt,
+		Remaining:            int64Ptr(result.remaining),
+		Window:               result.windowType,
+		LongWindowResetAt:    result.longWindowResetAt,
+		ShortWindowRemaining: result.shortWindowRemaining,
+		ShortWindowResetAt:   result.shortWindowResetAt,
+		LongWindowRemaining:  result.longWindowRemaining,
+		Freshness:            core.FreshnessFresh,
+		ProbeStatus:          core.ProbeStatusReady,
+		Status:               StatusReady,
+		PlanType:             inferPlanType(usage.PlanType),
 	}
 }
 

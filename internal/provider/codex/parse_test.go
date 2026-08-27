@@ -49,6 +49,58 @@ func TestParseWhamUsage_Paid5hAndWeekly(t *testing.T) {
 	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(weeklyReset) {
 		t.Errorf("expected LongWindowResetAt %v, got %v", weeklyReset, result.LongWindowResetAt)
 	}
+	if result.ShortWindowRemaining == nil || *result.ShortWindowRemaining != 40 {
+		t.Errorf("expected ShortWindowRemaining 40, got %v", result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt == nil || !result.ShortWindowResetAt.Equal(fiveHourReset) {
+		t.Errorf("expected ShortWindowResetAt %v, got %v", fiveHourReset, result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 450 {
+		t.Errorf("expected LongWindowRemaining 450, got %v", result.LongWindowRemaining)
+	}
+}
+
+func TestParseWhamUsage_PaidWeeklyOnly(t *testing.T) {
+	observedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	weeklyReset := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
+
+	payload := `{
+		"plan_type": "plus",
+		"rate_limit": {
+			"primary_window": {
+				"limit_window_seconds": 604800,
+				"reset_at": "2026-08-27T00:00:00Z",
+				"remaining": 450,
+				"limit": 500
+			}
+		}
+	}`
+
+	result := ParseWhamUsage([]byte(payload), observedAt)
+	if result.Status != StatusReady {
+		t.Fatalf("expected StatusReady, got %v (err: %s)", result.Status, result.Error)
+	}
+	if result.Window != WindowWeekly {
+		t.Errorf("expected WindowWeekly, got %v", result.Window)
+	}
+	if result.Remaining == nil || *result.Remaining != 450 {
+		t.Errorf("expected remaining 450, got %v", result.Remaining)
+	}
+	if result.ResetAt == nil || !result.ResetAt.Equal(weeklyReset) {
+		t.Errorf("expected resetAt %v, got %v", weeklyReset, result.ResetAt)
+	}
+	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(weeklyReset) {
+		t.Errorf("expected LongWindowResetAt %v, got %v", weeklyReset, result.LongWindowResetAt)
+	}
+	if result.ShortWindowRemaining != nil {
+		t.Errorf("expected ShortWindowRemaining nil, got %v", *result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt != nil {
+		t.Errorf("expected ShortWindowResetAt nil, got %v", *result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining != nil {
+		t.Errorf("expected LongWindowRemaining nil, got %v", *result.LongWindowRemaining)
+	}
 }
 
 func TestParseWhamUsage_FreeMonthly(t *testing.T) {
@@ -82,5 +134,14 @@ func TestParseWhamUsage_FreeMonthly(t *testing.T) {
 	}
 	if result.ResetAt == nil || !result.ResetAt.Equal(monthlyReset) {
 		t.Errorf("expected resetAt %v, got %v", monthlyReset, result.ResetAt)
+	}
+	if result.ShortWindowRemaining != nil {
+		t.Errorf("expected ShortWindowRemaining nil, got %v", *result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt != nil {
+		t.Errorf("expected ShortWindowResetAt nil, got %v", *result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 10 {
+		t.Errorf("expected LongWindowRemaining 10, got %v", result.LongWindowRemaining)
 	}
 }

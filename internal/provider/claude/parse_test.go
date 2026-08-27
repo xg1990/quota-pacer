@@ -43,6 +43,15 @@ func TestParseClaudeUsage_StandardSessionLimit(t *testing.T) {
 	if result.ResetAt == nil || !result.ResetAt.Equal(resetAtExpected) {
 		t.Errorf("expected resetAt %v, got %v", resetAtExpected, result.ResetAt)
 	}
+	if result.ShortWindowRemaining != nil {
+		t.Errorf("expected nil ShortWindowRemaining for single-window data, got %v", *result.ShortWindowRemaining)
+	}
+	if result.ShortWindowResetAt != nil {
+		t.Errorf("expected nil ShortWindowResetAt for single-window data, got %v", *result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining != nil {
+		t.Errorf("expected nil LongWindowRemaining for single-window data, got %v", *result.LongWindowRemaining)
+	}
 }
 
 func TestParseClaudeUsage_FiveHourAndWeeklyWindows(t *testing.T) {
@@ -80,6 +89,16 @@ func TestParseClaudeUsage_FiveHourAndWeeklyWindows(t *testing.T) {
 	}
 	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(weeklyReset) {
 		t.Errorf("expected LongWindowResetAt %v, got %v", weeklyReset, result.LongWindowResetAt)
+	}
+	if result.ShortWindowRemaining == nil || *result.ShortWindowRemaining != 30 {
+		t.Errorf("expected ShortWindowRemaining 30, got %v", result.ShortWindowRemaining)
+	}
+	fiveHourReset := time.Date(2026, 8, 20, 14, 0, 0, 0, time.UTC)
+	if result.ShortWindowResetAt == nil || !result.ShortWindowResetAt.Equal(fiveHourReset) {
+		t.Errorf("expected ShortWindowResetAt %v, got %v", fiveHourReset, result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 400 {
+		t.Errorf("expected LongWindowRemaining 400, got %v", result.LongWindowRemaining)
 	}
 }
 
@@ -326,6 +345,16 @@ func TestParseClaudeUsage_UnifiedHeaders_7dAnd5h(t *testing.T) {
 	if result.OrganizationUUID != "org-test-7d-5h" {
 		t.Errorf("expected org-test-7d-5h, got %v", result.OrganizationUUID)
 	}
+	if result.ShortWindowRemaining == nil || *result.ShortWindowRemaining != 100 {
+		t.Errorf("expected ShortWindowRemaining 100, got %v", result.ShortWindowRemaining)
+	}
+	expected5hReset := time.Unix(1787627400, 0).UTC()
+	if result.ShortWindowResetAt == nil || !result.ShortWindowResetAt.Equal(expected5hReset) {
+		t.Errorf("expected ShortWindowResetAt %v, got %v", expected5hReset, result.ShortWindowResetAt)
+	}
+	if result.LongWindowRemaining == nil || *result.LongWindowRemaining != 51 {
+		t.Errorf("expected LongWindowRemaining 51, got %v", result.LongWindowRemaining)
+	}
 }
 
 func TestParseClaudeUsage_UnifiedHeaders_5hDepleted(t *testing.T) {
@@ -358,6 +387,12 @@ func TestParseClaudeUsage_UnifiedHeaders_5hDepleted(t *testing.T) {
 	}
 	if result.LongWindowResetAt == nil || !result.LongWindowResetAt.Equal(expectedWeeklyReset) {
 		t.Errorf("expected LongWindowResetAt %v, got %v", expectedWeeklyReset, result.LongWindowResetAt)
+	}
+	if result.ShortWindowRemaining != nil {
+		t.Errorf("expected nil ShortWindowRemaining for rejected single-window branch, got %v", *result.ShortWindowRemaining)
+	}
+	if result.LongWindowRemaining != nil {
+		t.Errorf("expected nil LongWindowRemaining for rejected single-window branch, got %v", *result.LongWindowRemaining)
 	}
 }
 
