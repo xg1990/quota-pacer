@@ -37,6 +37,7 @@ type PlanResult struct {
 	Error      string
 	HTTPStatus int  // 最近一次 settings/billing 非 2xx 状态；0=无或网络失败
 	AuthFailed bool // 鉴权失效（401/凭证文案）；true 时不得标 free 正额度
+	Windows    []core.QuotaWindow
 	// LongWindowResetAt 仅来自 OAuth 周账单 currentPeriod(type=weekly).end；monthly 不计。
 	LongWindowResetAt *time.Time
 	// LongWindowBillingSeen 表示本轮已成功拿到可解析的 OAuth 周账单响应；
@@ -169,6 +170,11 @@ func (p Prober) FetchPlan(ctx context.Context, request PlanRequest) PlanResult {
 		longAt, seen := p.fetchOAuthWeeklyLongWindow(ctx, request)
 		result.LongWindowBillingSeen = seen
 		result.LongWindowResetAt = longAt
+		if longAt != nil && !longAt.IsZero() {
+			result.Windows = []core.QuotaWindow{
+				{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 100, ResetAt: *longAt},
+			}
+		}
 	}
 	return result
 }

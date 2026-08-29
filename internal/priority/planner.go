@@ -24,6 +24,7 @@ type ProbeEvidence struct {
 	ObservedAt        time.Time
 	ResetAt           *time.Time
 	Remaining         *int64
+	Windows           []core.QuotaWindow
 	LongWindowResetAt *time.Time
 	// ShortWindowRemaining/ShortWindowResetAt: 5h 窗口剩余%与 reset 时间（provider 确认时才填）。
 	ShortWindowRemaining *int64
@@ -31,10 +32,10 @@ type ProbeEvidence struct {
 	// LongWindowRemaining 与既有 LongWindowResetAt 配对：长/周窗口剩余%。
 	LongWindowRemaining *int64
 	Freshness           core.Freshness
-	ProbeStatus       core.ProbeStatus
-	Status            EvidenceStatus
-	PlanType          core.PlanType
-	EvidenceFresh     bool
+	ProbeStatus         core.ProbeStatus
+	Status              EvidenceStatus
+	PlanType            core.PlanType
+	EvidenceFresh       bool
 	// XAIDepletedKind: free | weekly | monthly_and_weekly；空表示非 xAI 耗尽语义。
 	XAIDepletedKind string
 	// QuotaKnown 仅 xAI：false 时禁止驱动 priority/disabled 变更。
@@ -73,6 +74,7 @@ type PlanItem struct {
 	PlanType          core.PlanType
 	ResetAt           *time.Time
 	Remaining         *int64
+	Windows           []core.QuotaWindow
 	LongWindowResetAt *time.Time
 	// ShortWindowRemaining/ShortWindowResetAt: 5h 窗口剩余%与 reset 时间（provider 确认时才填）。
 	ShortWindowRemaining *int64
@@ -159,6 +161,7 @@ func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvi
 			item.PlanType = fresh.PlanType
 			item.ResetAt = fresh.ResetAt
 			item.Remaining = fresh.Remaining
+			item.Windows = fresh.Windows
 			item.LongWindowResetAt = fresh.LongWindowResetAt
 			item.ShortWindowRemaining = fresh.ShortWindowRemaining
 			item.ShortWindowResetAt = fresh.ShortWindowResetAt
@@ -179,6 +182,7 @@ func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvi
 			}
 			item.ResetAt = cached.ResetAt
 			item.Remaining = cached.Remaining
+			item.Windows = cached.Windows
 			item.LongWindowResetAt = cached.LongWindowResetAt
 			item.ShortWindowRemaining = cached.ShortWindowRemaining
 			item.ShortWindowResetAt = cached.ShortWindowResetAt
@@ -433,11 +437,24 @@ func windowPacingScore(remaining int64, resetAt time.Time, duration time.Duratio
 }
 
 // pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
-// 优先在所有已知窗口（5h/长周期）中取最紧张（分数最低）的那个；provider 未上报
-// 多窗口数据时（如 xAI）回退到 legacy 单窗口启发式。
+// 遍历凭据的所有有效额度窗口（Windows），取最紧张（Pacing 分数最低，即瓶颈窗口）的那个；
+// 若无多窗口结构，则尝试短窗/长窗 legacy 字段，最终回退到单窗口启发式。
 func pacingScore(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
 		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响
+	}
+
+	if len(item.Windows) > 0 {
+		scores := make([]float64, 0, len(item.Windows))
+		for _, w := range item.Windows {
+			if w.Duration <= 0 || w.ResetAt.IsZero() {
+				continue
+			}
+			scores = append(scores, windowPacingScore(w.Remaining, w.ResetAt, w.Duration, now))
+		}
+		if len(scores) > 0 {
+			return slices.Min(scores)
+		}
 	}
 
 	scores := make([]float64, 0, 2)

@@ -55,6 +55,7 @@ func ParseWhamUsage(raw []byte, observedAt time.Time) ProbeResult {
 		ResetAt:              result.resetAt,
 		Remaining:            int64Ptr(result.remaining),
 		Window:               result.windowType,
+		Windows:              result.windows,
 		LongWindowResetAt:    result.longWindowResetAt,
 		ShortWindowRemaining: result.shortWindowRemaining,
 		ShortWindowResetAt:   result.shortWindowResetAt,
@@ -116,22 +117,39 @@ func windowResetTime(observedAt time.Time, window whamWindow) *time.Time {
 }
 
 func windowRemaining(window whamWindow) (int64, bool) {
-	if remaining, ok := toFloat64(window.Remaining); ok {
-		return nonNegativeCeil(remaining), true
-	}
-	limit, okLimit := toFloat64(window.Limit)
-	used, okUsed := toFloat64(window.Used)
-	if okLimit && okUsed {
-		return nonNegativeCeil(limit - used), true
-	}
 	if reached, ok := toBool(window.LimitReached); ok && reached {
 		return 0, true
 	}
 	if usedPercent, ok := toFloat64(window.UsedPercent); ok {
 		remainingPercent := 100 - usedPercent
-		return nonNegativeCeil(remainingPercent), true
+		return clampPercent(remainingPercent), true
+	}
+	limit, okLimit := toFloat64(window.Limit)
+	remaining, okRem := toFloat64(window.Remaining)
+	if okRem {
+		if okLimit && limit > 0 {
+			return clampPercent((remaining / limit) * 100), true
+		}
+		if remaining <= 1.0 && remaining >= 0 {
+			return clampPercent(remaining * 100), true
+		}
+		return clampPercent(remaining), true
+	}
+	used, okUsed := toFloat64(window.Used)
+	if okLimit && okUsed && limit > 0 {
+		return clampPercent(((limit - used) / limit) * 100), true
 	}
 	return 0, false
+}
+
+func clampPercent(value float64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return int64(math.Ceil(value))
 }
 
 func parseAnyTime(raw any) (*time.Time, bool) {

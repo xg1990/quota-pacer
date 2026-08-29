@@ -57,6 +57,7 @@ type ProbeResult struct {
 	ResetAt              *time.Time
 	Remaining            *int64
 	Window               WindowType
+	Windows              []core.QuotaWindow
 	LongWindowResetAt    *time.Time
 	ShortWindowRemaining *int64
 	ShortWindowResetAt   *time.Time

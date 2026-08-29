@@ -15,10 +15,10 @@ import (
 )
 
 // SchemaVersion 是当前缓存条目的结构版本。
-// 每次给 Entry/ProbeSuccess 增补会影响打分的字段（如多窗口 Remaining）时必须递增此值，
+// 每次给 Entry/ProbeSuccess 增补会影响打分的字段（如多窗口 Windows 切片）时必须递增此值，
 // 否则旧版本写入的缓存条目会被 NeedsProbe/ValidEntry 误判为“完整有效”而继续回放，
 // 导致 pacingScore 在缺失字段下静默退化为 legacy 单窗口口径。
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 // ErrCorruptCache 表示缓存文件不是可解析的状态文档。
 var ErrCorruptCache = errors.New("state: corrupt cache")
@@ -53,10 +53,11 @@ type Entry struct {
 	XAIDepletedKind string      `json:"xai_depleted_kind,omitempty"` // free | weekly | monthly_and_weekly
 	QuotaFailTimes  []time.Time `json:"quota_fail_times,omitempty"`  // xAI 429 失败时间戳队列
 	// LongWindowResetAt 是长/周账单容量重置时刻（可选）；usage 写路径必须保留。
-	LongWindowResetAt    time.Time `json:"long_window_reset_at,omitempty"`
-	ShortWindowRemaining *int64    `json:"short_window_remaining,omitempty"`
-	ShortWindowResetAt   time.Time `json:"short_window_reset_at,omitempty"`
-	LongWindowRemaining  *int64    `json:"long_window_remaining,omitempty"`
+	LongWindowResetAt    time.Time          `json:"long_window_reset_at,omitempty"`
+	ShortWindowRemaining *int64             `json:"short_window_remaining,omitempty"`
+	ShortWindowResetAt   time.Time          `json:"short_window_reset_at,omitempty"`
+	LongWindowRemaining  *int64             `json:"long_window_remaining,omitempty"`
+	Windows              []core.QuotaWindow `json:"windows,omitempty"`
 }
 
 // ProbePolicy 定义状态缓存何时必须重新 fresh probe。
@@ -97,6 +98,7 @@ type ProbeSuccess struct {
 	ShortWindowRemaining *int64
 	ShortWindowResetAt   time.Time
 	LongWindowRemaining  *int64
+	Windows              []core.QuotaWindow
 	// PreserveLongWindow：true 时在入参零值下保留已有 LongWindowResetAt（usage 路径）。
 	PreserveLongWindow bool
 	// PreserveXAIPolicy：true 时合并已有 xAI 策略字段（仅当入参零值）。
@@ -221,12 +223,16 @@ func (s *Store) MarkProbeSuccess(ctx context.Context, success ProbeSuccess) erro
 		ShortWindowRemaining: cloneInt64Ptr(success.ShortWindowRemaining),
 		ShortWindowResetAt:   utcOrZero(success.ShortWindowResetAt),
 		LongWindowRemaining:  cloneInt64Ptr(success.LongWindowRemaining),
+		Windows:              cloneQuotaWindows(success.Windows),
 	}
 	if success.PreserveLongWindow && entry.LongWindowResetAt.IsZero() {
 		entry.LongWindowResetAt = prev.LongWindowResetAt
 		if entry.LongWindowRemaining == nil {
 			entry.LongWindowRemaining = cloneInt64Ptr(prev.LongWindowRemaining)
 		}
+	}
+	if success.PreserveLongWindow && len(entry.Windows) == 0 && len(prev.Windows) > 0 {
+		entry.Windows = cloneQuotaWindows(prev.Windows)
 	}
 	if entry.PlanType == "" || entry.PlanType == core.PlanTypeUnknown {
 		entry.PlanType = prev.PlanType
@@ -298,6 +304,22 @@ func cloneInt64Ptr(v *int64) *int64 {
 	}
 	n := *v
 	return &n
+}
+
+func cloneQuotaWindows(windows []core.QuotaWindow) []core.QuotaWindow {
+	if len(windows) == 0 {
+		return nil
+	}
+	res := make([]core.QuotaWindow, len(windows))
+	for i, w := range windows {
+		res[i] = core.QuotaWindow{
+			Name:      w.Name,
+			Duration:  w.Duration,
+			Remaining: w.Remaining,
+			ResetAt:   w.ResetAt.UTC(),
+		}
+	}
+	return res
 }
 
 func utcOrZero(t time.Time) time.Time {

@@ -11,6 +11,7 @@ type effectiveWindow struct {
 	resetAt              *time.Time
 	remaining            int64
 	windowType           WindowType
+	windows              []core.QuotaWindow
 	longWindowResetAt    *time.Time
 	shortWindowRemaining *int64
 	shortWindowResetAt   *time.Time
@@ -36,16 +37,31 @@ func pickEffectiveWindow(usage whamUsage, observedAt time.Time) (effectiveWindow
 func pickPaidWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, bool) {
 	fiveHour, hasFiveHour := pickWindow(usage, observedAt, isFiveHourWindow)
 	weekly, hasWeekly := pickWindow(usage, observedAt, isWeeklyWindow)
-	// fiveHour + weekly 同时存在：保留原语义（优先 5h，weekly 耗尽则回退 weekly）。
+	// fiveHour + weekly 同时存在：与 Claude/Antigravity 宏观额度口径对齐，以 weekly 为主窗口，
+	// 并完整填充 Windows 切片供 PacingScore 多窗口取 min 瓶颈。
 	if hasFiveHour && hasWeekly {
+		windowsList := []core.QuotaWindow{
+			{Name: "5h", Duration: 5 * time.Hour, Remaining: fiveHour.remaining, ResetAt: *fiveHour.resetAt},
+			{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: weekly.remaining, ResetAt: *weekly.resetAt},
+		}
 		if weekly.remaining <= 0 {
-			return effectiveWindow{resetAt: weekly.resetAt, remaining: 0, windowType: WindowWeekly}, true
+			return effectiveWindow{
+				resetAt:              weekly.resetAt,
+				remaining:            0,
+				windowType:           WindowWeekly,
+				windows:              windowsList,
+				longWindowResetAt:    weekly.resetAt,
+				shortWindowRemaining: int64Ptr(fiveHour.remaining),
+				shortWindowResetAt:   fiveHour.resetAt,
+				longWindowRemaining:  int64Ptr(weekly.remaining),
+			}, true
 		}
 		if fiveHour.remaining <= 0 {
 			return effectiveWindow{
 				resetAt:              fiveHour.resetAt,
 				remaining:            0,
 				windowType:           WindowFiveHour,
+				windows:              windowsList,
 				longWindowResetAt:    weekly.resetAt,
 				shortWindowRemaining: int64Ptr(fiveHour.remaining),
 				shortWindowResetAt:   fiveHour.resetAt,
@@ -53,18 +69,43 @@ func pickPaidWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, boo
 			}, true
 		}
 		return effectiveWindow{
-			resetAt:              fiveHour.resetAt,
-			remaining:            fiveHour.remaining,
-			windowType:           WindowFiveHour,
+			resetAt:              weekly.resetAt,
+			remaining:            weekly.remaining,
+			windowType:           WindowWeekly,
+			windows:              windowsList,
 			longWindowResetAt:    weekly.resetAt,
 			shortWindowRemaining: int64Ptr(fiveHour.remaining),
 			shortWindowResetAt:   fiveHour.resetAt,
 			longWindowRemaining:  int64Ptr(weekly.remaining),
 		}, true
 	}
-	// Codex 取消 5h 限制后：仅 weekly 付费窗口时动态识别为付费额度。
+	// 仅有 weekly 付费窗口
 	if hasWeekly {
-		return effectiveWindow{resetAt: weekly.resetAt, remaining: weekly.remaining, windowType: WindowWeekly, longWindowResetAt: weekly.resetAt}, true
+		windowsList := []core.QuotaWindow{
+			{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: weekly.remaining, ResetAt: *weekly.resetAt},
+		}
+		return effectiveWindow{
+			resetAt:             weekly.resetAt,
+			remaining:           weekly.remaining,
+			windowType:          WindowWeekly,
+			windows:             windowsList,
+			longWindowResetAt:   weekly.resetAt,
+			longWindowRemaining: int64Ptr(weekly.remaining),
+		}, true
+	}
+	// 仅有 fiveHour 付费窗口
+	if hasFiveHour {
+		windowsList := []core.QuotaWindow{
+			{Name: "5h", Duration: 5 * time.Hour, Remaining: fiveHour.remaining, ResetAt: *fiveHour.resetAt},
+		}
+		return effectiveWindow{
+			resetAt:              fiveHour.resetAt,
+			remaining:            fiveHour.remaining,
+			windowType:           WindowFiveHour,
+			windows:              windowsList,
+			shortWindowRemaining: int64Ptr(fiveHour.remaining),
+			shortWindowResetAt:   fiveHour.resetAt,
+		}, true
 	}
 	return effectiveWindow{}, false
 }
@@ -74,10 +115,14 @@ func pickFreeWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, boo
 	if !ok {
 		return effectiveWindow{}, false
 	}
+	windowsList := []core.QuotaWindow{
+		{Name: "monthly", Duration: 30 * 24 * time.Hour, Remaining: monthly.remaining, ResetAt: *monthly.resetAt},
+	}
 	return effectiveWindow{
 		resetAt:             monthly.resetAt,
 		remaining:           monthly.remaining,
 		windowType:          WindowMonthly,
+		windows:             windowsList,
 		longWindowResetAt:   monthly.resetAt,
 		longWindowRemaining: int64Ptr(monthly.remaining),
 	}, true

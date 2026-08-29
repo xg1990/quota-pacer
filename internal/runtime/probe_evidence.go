@@ -350,8 +350,9 @@ func recordCodexProbeResult(ctx context.Context, store *state.Store, result code
 		ShortWindowRemaining: result.ShortWindowRemaining,
 		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
 		LongWindowRemaining:  result.LongWindowRemaining,
+		Windows:              result.Windows,
 	})
-	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
+	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Windows: result.Windows, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 
 func recordAntigravityProbeResult(ctx context.Context, store *state.Store, result antigravity.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {
@@ -373,8 +374,9 @@ func recordAntigravityProbeResult(ctx context.Context, store *state.Store, resul
 		ShortWindowRemaining: result.ShortWindowRemaining,
 		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
 		LongWindowRemaining:  result.LongWindowRemaining,
+		Windows:              result.Windows,
 	})
-	return priority.ProbeEvidence{Provider: core.ProviderAntigravity, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
+	return priority.ProbeEvidence{Provider: core.ProviderAntigravity, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Windows: result.Windows, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 
 func recordClaudeProbeResult(ctx context.Context, store *state.Store, result claude.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {
@@ -395,8 +397,9 @@ func recordClaudeProbeResult(ctx context.Context, store *state.Store, result cla
 		ShortWindowRemaining: result.ShortWindowRemaining,
 		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
 		LongWindowRemaining:  result.LongWindowRemaining,
+		Windows:              result.Windows,
 	})
-	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
+	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Windows: result.Windows, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
 }
 
 // derefTimeOrZero 将可能为 nil 的长窗口重置时间指针安全解引用为零值 time.Time。

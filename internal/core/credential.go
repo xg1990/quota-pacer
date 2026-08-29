@@ -1,6 +1,9 @@
 package core
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Provider 标识凭证来自的上游能力域。
 type Provider string
@@ -111,6 +114,14 @@ const (
 	// CanPromoteAfterFreshProbe 表示凭证拥有 fresh probe 证据，可进入排序候选。
 	CanPromoteAfterFreshProbe CanPromote = true
 )
+
+// QuotaWindow 表示单个额度配额时间窗口（如 5h, 24h, 7d weekly, 30d monthly 等）。
+type QuotaWindow struct {
+	Name      string        `json:"name"`
+	Duration  time.Duration `json:"duration"`
+	Remaining int64         `json:"remaining"` // 归一化剩余百分比 0..100
+	ResetAt   time.Time     `json:"reset_at"`
+}
 
 // StrategyName 标识 registry 选中的 provider 策略名称。
 type StrategyName string

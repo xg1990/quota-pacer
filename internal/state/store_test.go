@@ -108,6 +108,10 @@ func TestStore_MultiWindowPersistence(t *testing.T) {
 		ShortWindowResetAt:   reset5h,
 		LongWindowRemaining:  &longRem,
 		LongWindowResetAt:    reset7d,
+		Windows: []core.QuotaWindow{
+			{Name: "5h", Duration: 5 * time.Hour, Remaining: 90, ResetAt: reset5h},
+			{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 75, ResetAt: reset7d},
+		},
 	}
 	if err := store.MarkProbeSuccess(context.Background(), success); err != nil {
 		t.Fatalf("MarkProbeSuccess failed: %v", err)
@@ -139,6 +143,15 @@ func TestStore_MultiWindowPersistence(t *testing.T) {
 	}
 	if !entry.LongWindowResetAt.Equal(reset7d) {
 		t.Errorf("expected long_window_reset_at %v, got %v", reset7d, entry.LongWindowResetAt)
+	}
+	if len(entry.Windows) != 2 {
+		t.Fatalf("expected 2 windows, got %d", len(entry.Windows))
+	}
+	if entry.Windows[0].Name != "5h" || entry.Windows[0].Remaining != 90 {
+		t.Errorf("unexpected window 0: %+v", entry.Windows[0])
+	}
+	if entry.Windows[1].Name != "weekly" || entry.Windows[1].Remaining != 75 {
+		t.Errorf("unexpected window 1: %+v", entry.Windows[1])
 	}
 }
 

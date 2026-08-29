@@ -180,12 +180,30 @@ func parseSingleUsage(usage claudeUsageResponse, observedAt time.Time) (ProbeRes
 }
 
 func makeReadyResult(observedAt time.Time, resetAt *time.Time, remaining int64, winType WindowType, longReset *time.Time, planType core.PlanType, orgUUID string, shortRem *int64, shortReset *time.Time, longRem *int64) ProbeResult {
+	var windows []core.QuotaWindow
+	if shortRem != nil && shortReset != nil {
+		windows = append(windows, core.QuotaWindow{Name: "5h", Duration: 5 * time.Hour, Remaining: *shortRem, ResetAt: *shortReset})
+	}
+	if longRem != nil && longReset != nil {
+		windows = append(windows, core.QuotaWindow{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: *longRem, ResetAt: *longReset})
+	} else if winType == WindowWeekly && resetAt != nil {
+		if shortReset == nil || !shortReset.Equal(*resetAt) {
+			windows = append(windows, core.QuotaWindow{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: remaining, ResetAt: *resetAt})
+		}
+	} else if winType == WindowFiveHour && resetAt != nil {
+		if shortReset == nil {
+			windows = append(windows, core.QuotaWindow{Name: "5h", Duration: 5 * time.Hour, Remaining: remaining, ResetAt: *resetAt})
+		}
+	} else if winType == WindowDaily && resetAt != nil {
+		windows = append(windows, core.QuotaWindow{Name: "daily", Duration: 24 * time.Hour, Remaining: remaining, ResetAt: *resetAt})
+	}
 	return ProbeResult{
 		Provider:             core.ProviderClaude,
 		ObservedAt:           observedAt.UTC(),
 		ResetAt:              resetAt,
 		Remaining:            int64Ptr(remaining),
 		Window:               winType,
+		Windows:              windows,
 		LongWindowResetAt:    longReset,
 		ShortWindowRemaining: shortRem,
 		ShortWindowResetAt:   shortReset,

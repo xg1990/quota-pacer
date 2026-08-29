@@ -624,6 +624,7 @@ func attachCachedEvidence(credentials []core.Credential, evidence []priority.Pro
 			ShortWindowRemaining: cloneInt64Ptr(entry.ShortWindowRemaining),
 			ShortWindowResetAt:   shortWindowResetAt,
 			LongWindowRemaining:  cloneInt64Ptr(entry.LongWindowRemaining),
+			Windows:              cloneQuotaWindows(entry.Windows),
 			Freshness:            core.FreshnessStale,
 			ProbeStatus:          core.ProbeStatusReady,
 			Status:               priority.EvidenceStatusReady,
@@ -640,4 +641,20 @@ func cloneInt64Ptr(v *int64) *int64 {
 	}
 	n := *v
 	return &n
+}
+
+func cloneQuotaWindows(windows []core.QuotaWindow) []core.QuotaWindow {
+	if len(windows) == 0 {
+		return nil
+	}
+	res := make([]core.QuotaWindow, len(windows))
+	for i, w := range windows {
+		res[i] = core.QuotaWindow{
+			Name:      w.Name,
+			Duration:  w.Duration,
+			Remaining: w.Remaining,
+			ResetAt:   w.ResetAt.UTC(),
+		}
+	}
+	return res
 }

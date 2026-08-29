@@ -40,10 +40,11 @@ type SnapshotItem struct {
 	Remaining            *int64     `json:"remaining"`
 	ResetAt              *time.Time `json:"reset_at"`
 	LongWindowResetAt    *time.Time `json:"long_window_reset_at"`
-	ShortWindowRemaining *int64     `json:"short_window_remaining"`
-	ShortWindowResetAt   *time.Time `json:"short_window_reset_at"`
-	LongWindowRemaining  *int64     `json:"long_window_remaining"`
-	PacingScore          float64    `json:"pacing_score"`
+	ShortWindowRemaining *int64             `json:"short_window_remaining"`
+	ShortWindowResetAt   *time.Time         `json:"short_window_reset_at"`
+	LongWindowRemaining  *int64             `json:"long_window_remaining"`
+	Windows              []core.QuotaWindow `json:"windows,omitempty"`
+	PacingScore          float64            `json:"pacing_score"`
 }
 
 // SnapshotChange 是单个写入候选的脱敏审计视图。
@@ -136,6 +137,7 @@ func snapshotItem(item priority.PlanItem) SnapshotItem {
 		ShortWindowRemaining: item.ShortWindowRemaining,
 		ShortWindowResetAt:   item.ShortWindowResetAt,
 		LongWindowRemaining:  item.LongWindowRemaining,
+		Windows:              item.Windows,
 		PacingScore:          item.PacingScore,
 	}
 }

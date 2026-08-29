@@ -78,14 +78,27 @@ func ParseAvailableModels(raw []byte, observedAt time.Time, group ModelGroup) Pr
 		Status:      StatusReady,
 		PlanType:    inferPlanType(windows),
 	}
-	if weekly, ok := firstWindow(windows, WindowWeekly); ok {
-		result.LongWindowResetAt = weekly.resetAt
-		result.LongWindowRemaining = int64Ptr(weekly.remaining)
-	}
-	if fiveHour, ok := firstWindow(windows, WindowFiveHour); ok {
+	var quotaWindows []core.QuotaWindow
+	if fiveHour, ok := firstWindow(windows, WindowFiveHour); ok && fiveHour.resetAt != nil {
 		result.ShortWindowRemaining = int64Ptr(fiveHour.remaining)
 		result.ShortWindowResetAt = fiveHour.resetAt
+		quotaWindows = append(quotaWindows, core.QuotaWindow{Name: "5h", Duration: 5 * time.Hour, Remaining: fiveHour.remaining, ResetAt: *fiveHour.resetAt})
 	}
+	if weekly, ok := firstWindow(windows, WindowWeekly); ok && weekly.resetAt != nil {
+		result.LongWindowResetAt = weekly.resetAt
+		result.LongWindowRemaining = int64Ptr(weekly.remaining)
+		quotaWindows = append(quotaWindows, core.QuotaWindow{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: weekly.remaining, ResetAt: *weekly.resetAt})
+	}
+	if len(quotaWindows) == 0 && selected.resetAt != nil {
+		dur := 7 * 24 * time.Hour
+		name := "weekly"
+		if selected.window == WindowFiveHour {
+			dur = 5 * time.Hour
+			name = "5h"
+		}
+		quotaWindows = append(quotaWindows, core.QuotaWindow{Name: name, Duration: dur, Remaining: selected.remaining, ResetAt: *selected.resetAt})
+	}
+	result.Windows = quotaWindows
 	return result
 }
 

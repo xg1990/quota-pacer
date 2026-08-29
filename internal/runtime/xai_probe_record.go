@@ -119,6 +119,7 @@ func recordXAIPlanResult(ctx context.Context, store *state.Store, plan xai.PlanR
 		ResetAt:           &resetAt,
 		Remaining:         &rem,
 		LongWindowResetAt: longWindow,
+		Windows:           plan.Windows,
 		Freshness:         core.FreshnessFresh,
 		ProbeStatus:       core.ProbeStatusReady,
 		Status:            priority.EvidenceStatusReady,

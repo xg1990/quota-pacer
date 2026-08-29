@@ -710,31 +710,77 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_LongOnlyFallback(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_MultiWindow_PrimaryDepletedStillZero(t *testing.T) {
+func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_Bottleneck(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+	primaryRem := int64(100)
 
-	// Primary 窗口（Remaining）已耗尽：即使 LongWindowRemaining 很高，也必须直接得 0，
-	// 顶部短路不能被多窗口 min 逻辑绕过。
-	zeroRem := int64(0)
-	longReset := now.Add(100 * time.Hour)
-	longRem := int64(90)
+	// 账号定义了 4 个窗口：5h, 24h, 7d (weekly), 30d (monthly)
+	// Window 1: 5h 窗口, 剩余 80%, 4h 后重置 -> score = 0.80 / (4/5) = 1.00
+	// Window 2: 24h 窗口, 剩余 50%, 12h 后重置 -> score = 0.50 / (12/24) = 1.00
+	// Window 3: 7d 窗口, 剩余 20%, 84h 后重置 -> score = 0.20 / (84/168) = 0.40 (最紧张瓶颈窗口)
+	// Window 4: 30d 窗口, 剩余 90%, 15d 后重置 -> score = 0.90 / (15/30) = 1.80
+	windows := []core.QuotaWindow{
+		{Name: "5h", Duration: 5 * time.Hour, Remaining: 80, ResetAt: now.Add(4 * time.Hour)},
+		{Name: "24h", Duration: 24 * time.Hour, Remaining: 50, ResetAt: now.Add(12 * time.Hour)},
+		{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 20, ResetAt: now.Add(84 * time.Hour)},
+		{Name: "monthly", Duration: 30 * 24 * time.Hour, Remaining: 90, ResetAt: now.Add(15 * 24 * time.Hour)},
+	}
 
 	credentials := []core.Credential{
-		{Name: "codex-depleted", AuthIndex: "auth-depleted", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+		{Name: "codex-4-windows", AuthIndex: "auth-4-windows", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
 	}
 	evidence := []ProbeEvidence{
 		{
-			Provider:            core.ProviderCodex,
-			AuthIndex:           "auth-depleted",
-			ObservedAt:          now,
-			Remaining:           &zeroRem,
-			LongWindowRemaining: &longRem,
-			LongWindowResetAt:   &longReset,
-			Freshness:           core.FreshnessFresh,
-			ProbeStatus:         core.ProbeStatusReady,
-			Status:              EvidenceStatusReady,
-			PlanType:            core.PlanTypePro,
-			EvidenceFresh:       true,
+			Provider:      core.ProviderCodex,
+			AuthIndex:     "auth-4-windows",
+			ObservedAt:    now,
+			Remaining:     &primaryRem,
+			Windows:       windows,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+
+	got := plan.Items[0].PacingScore
+	want := 0.20 / (84.0 / 168.0) // 0.40 (weekly is bottleneck)
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected pacing score %.6f (weekly window bottleneck), got %.6f", want, got)
+	}
+}
+
+func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_AnyWindowDepletedIsZero(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+	primaryRem := int64(100)
+
+	// 5h 窗口还有 90%，但 7d 窗口剩余 0
+	windows := []core.QuotaWindow{
+		{Name: "5h", Duration: 5 * time.Hour, Remaining: 90, ResetAt: now.Add(4 * time.Hour)},
+		{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 0, ResetAt: now.Add(48 * time.Hour)},
+	}
+
+	credentials := []core.Credential{
+		{Name: "codex-window-depleted", AuthIndex: "auth-window-depleted", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderCodex,
+			AuthIndex:     "auth-window-depleted",
+			ObservedAt:    now,
+			Remaining:     &primaryRem,
+			Windows:       windows,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
 		},
 	}
 
@@ -743,9 +789,10 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_PrimaryDepletedStillZero(t *testi
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 	if got := plan.Items[0].PacingScore; got != 0 {
-		t.Errorf("expected pacing score 0 for depleted primary window, got %.6f", got)
+		t.Errorf("expected pacing score 0 when any window is depleted, got %.6f", got)
 	}
 }
+
 
 func TestPlanFreshOnly_CachedEvidencePopulatesPacingScoreAndZeroChanges(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
