@@ -605,6 +605,11 @@ func attachCachedEvidence(credentials []core.Credential, evidence []priority.Pro
 			t := entry.ShortWindowResetAt.UTC()
 			shortWindowResetAt = &t
 		}
+		var nearestResetCreditExpiresAt *time.Time
+		if !entry.NearestResetCreditExpiresAt.IsZero() {
+			t := entry.NearestResetCreditExpiresAt.UTC()
+			nearestResetCreditExpiresAt = &t
+		}
 		planType := entry.PlanType
 		if planType == "" || planType == core.PlanTypeUnknown {
 			if credential.PlanType != "" && credential.PlanType != core.PlanTypeUnknown {
@@ -615,21 +620,23 @@ func attachCachedEvidence(credentials []core.Credential, evidence []priority.Pro
 		}
 
 		merged = append(merged, priority.ProbeEvidence{
-			Provider:             provider,
-			AuthIndex:            credential.AuthIndex,
-			ObservedAt:           entry.ObservedAt,
-			ResetAt:              resetAt,
-			Remaining:            &rem,
-			LongWindowResetAt:    longWindowResetAt,
-			ShortWindowRemaining: cloneInt64Ptr(entry.ShortWindowRemaining),
-			ShortWindowResetAt:   shortWindowResetAt,
-			LongWindowRemaining:  cloneInt64Ptr(entry.LongWindowRemaining),
-			Windows:              cloneQuotaWindows(entry.Windows),
-			Freshness:            core.FreshnessStale,
-			ProbeStatus:          core.ProbeStatusReady,
-			Status:               priority.EvidenceStatusReady,
-			PlanType:             planType,
-			EvidenceFresh:        false,
+			Provider:                    provider,
+			AuthIndex:                   credential.AuthIndex,
+			ObservedAt:                  entry.ObservedAt,
+			ResetAt:                     resetAt,
+			Remaining:                   &rem,
+			LongWindowResetAt:           longWindowResetAt,
+			ShortWindowRemaining:        cloneInt64Ptr(entry.ShortWindowRemaining),
+			ShortWindowResetAt:          shortWindowResetAt,
+			LongWindowRemaining:         cloneInt64Ptr(entry.LongWindowRemaining),
+			Windows:                     cloneQuotaWindows(entry.Windows),
+			AvailableResetCredits:       entry.AvailableResetCredits,
+			NearestResetCreditExpiresAt: nearestResetCreditExpiresAt,
+			Freshness:                   core.FreshnessStale,
+			ProbeStatus:                 core.ProbeStatusReady,
+			Status:                      priority.EvidenceStatusReady,
+			PlanType:                    planType,
+			EvidenceFresh:               false,
 		})
 	}
 	return merged

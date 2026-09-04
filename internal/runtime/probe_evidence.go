@@ -338,21 +338,23 @@ func recordCodexProbeResult(ctx context.Context, store *state.Store, result code
 		return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
 	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
-		AuthIndex:            result.AuthIndex,
-		Provider:             result.Provider,
-		ObservedAt:           result.ObservedAt,
-		ResetAt:              *result.ResetAt,
-		Remaining:            int(*result.Remaining),
-		Source:               state.SourceFreshProbe,
-		NextProbeAt:          result.ObservedAt.Add(time.Hour),
-		LongWindowResetAt:    derefTimeOrZero(result.LongWindowResetAt),
-		PlanType:             result.PlanType,
-		ShortWindowRemaining: result.ShortWindowRemaining,
-		ShortWindowResetAt:   derefTimeOrZero(result.ShortWindowResetAt),
-		LongWindowRemaining:  result.LongWindowRemaining,
-		Windows:              result.Windows,
+		AuthIndex:                   result.AuthIndex,
+		Provider:                    result.Provider,
+		ObservedAt:                  result.ObservedAt,
+		ResetAt:                     *result.ResetAt,
+		Remaining:                   int(*result.Remaining),
+		Source:                      state.SourceFreshProbe,
+		NextProbeAt:                 result.ObservedAt.Add(time.Hour),
+		LongWindowResetAt:           derefTimeOrZero(result.LongWindowResetAt),
+		PlanType:                    result.PlanType,
+		ShortWindowRemaining:        result.ShortWindowRemaining,
+		ShortWindowResetAt:          derefTimeOrZero(result.ShortWindowResetAt),
+		LongWindowRemaining:         result.LongWindowRemaining,
+		Windows:                     result.Windows,
+		AvailableResetCredits:       result.AvailableResetCredits,
+		NearestResetCreditExpiresAt: derefTimeOrZero(result.NearestResetCreditExpiresAt),
 	})
-	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Windows: result.Windows, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true}, err
+	return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, ObservedAt: result.ObservedAt, ResetAt: result.ResetAt, Remaining: result.Remaining, LongWindowResetAt: result.LongWindowResetAt, ShortWindowRemaining: result.ShortWindowRemaining, ShortWindowResetAt: result.ShortWindowResetAt, LongWindowRemaining: result.LongWindowRemaining, Windows: result.Windows, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusReady, PlanType: result.PlanType, EvidenceFresh: true, AvailableResetCredits: result.AvailableResetCredits, NearestResetCreditExpiresAt: result.NearestResetCreditExpiresAt}, err
 }
 
 func recordAntigravityProbeResult(ctx context.Context, store *state.Store, result antigravity.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {

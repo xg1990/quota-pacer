@@ -155,6 +155,73 @@ func TestStore_MultiWindowPersistence(t *testing.T) {
 	}
 }
 
+// TestStore_ResetCreditsPersistence 验证 Codex 银行化重置额度信号
+// （AvailableResetCredits/NearestResetCreditExpiresAt）随 MarkProbeSuccess 落盘并可跨
+// 进程重新加载，与既有多窗口字段的持久化契约一致。
+func TestStore_ResetCreditsPersistence(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "cpa-store-reset-credits-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	cachePath := filepath.Join(tempDir, "refresh-cache.json")
+	store, err := Load(context.Background(), cachePath)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(84 * time.Hour)
+	expiresAt := now.Add(5 * 24 * time.Hour)
+
+	success := ProbeSuccess{
+		AuthIndex:                   "auth-codex-credit",
+		Provider:                    core.ProviderCodex,
+		ObservedAt:                  now,
+		ResetAt:                     resetAt,
+		Remaining:                   30,
+		Source:                      SourceFreshProbe,
+		NextProbeAt:                 now.Add(time.Hour),
+		PlanType:                    core.PlanTypePlus,
+		AvailableResetCredits:       1,
+		NearestResetCreditExpiresAt: expiresAt,
+	}
+	if err := store.MarkProbeSuccess(context.Background(), success); err != nil {
+		t.Fatalf("MarkProbeSuccess failed: %v", err)
+	}
+
+	entry, ok := store.GetEntry("auth-codex-credit", "")
+	if !ok {
+		t.Fatalf("expected entry to exist before save")
+	}
+	if entry.AvailableResetCredits != 1 {
+		t.Errorf("expected AvailableResetCredits 1 before save, got %d", entry.AvailableResetCredits)
+	}
+	if !entry.NearestResetCreditExpiresAt.Equal(expiresAt) {
+		t.Errorf("expected NearestResetCreditExpiresAt %v before save, got %v", expiresAt, entry.NearestResetCreditExpiresAt)
+	}
+
+	if err := store.SaveAtomic(context.Background()); err != nil {
+		t.Fatalf("SaveAtomic failed: %v", err)
+	}
+
+	reloaded, err := Load(context.Background(), cachePath)
+	if err != nil {
+		t.Fatalf("Reload failed: %v", err)
+	}
+	reloadedEntry, ok := reloaded.GetEntry("auth-codex-credit", "")
+	if !ok {
+		t.Fatalf("expected entry found in reloaded store")
+	}
+	if reloadedEntry.AvailableResetCredits != 1 {
+		t.Errorf("expected AvailableResetCredits 1 after reload, got %d", reloadedEntry.AvailableResetCredits)
+	}
+	if !reloadedEntry.NearestResetCreditExpiresAt.Equal(expiresAt) {
+		t.Errorf("expected NearestResetCreditExpiresAt %v after reload, got %v", expiresAt, reloadedEntry.NearestResetCreditExpiresAt)
+	}
+}
+
 // TestStore_SchemaVersionMismatchForcesReprobe 回归覆盖：v1.0.5 曾在 Entry/ProbeSuccess 增补
 // 多窗口字段（ShortWindowRemaining/LongWindowRemaining）却未递增 SchemaVersion，导致升级前
 // 写入的旧缓存条目被当作“完整有效”继续回放，pacingScore 因缺字段静默退化为 legacy 单窗口口径，

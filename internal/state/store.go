@@ -18,7 +18,8 @@ import (
 // 每次给 Entry/ProbeSuccess 增补会影响打分的字段（如多窗口 Windows 切片）时必须递增此值，
 // 否则旧版本写入的缓存条目会被 NeedsProbe/ValidEntry 误判为“完整有效”而继续回放，
 // 导致 pacingScore 在缺失字段下静默退化为 legacy 单窗口口径。
-const SchemaVersion = 3
+// v3→v4（Codex 银行化重置额度 AvailableResetCredits/NearestResetCreditExpiresAt 加入打分链路）。
+const SchemaVersion = 4
 
 // ErrCorruptCache 表示缓存文件不是可解析的状态文档。
 var ErrCorruptCache = errors.New("state: corrupt cache")
@@ -58,6 +59,10 @@ type Entry struct {
 	ShortWindowResetAt   time.Time          `json:"short_window_reset_at,omitempty"`
 	LongWindowRemaining  *int64             `json:"long_window_remaining,omitempty"`
 	Windows              []core.QuotaWindow `json:"windows,omitempty"`
+	// AvailableResetCredits/NearestResetCreditExpiresAt：仅 Codex，银行化重置额度信号
+	// （best-effort 探测，姊妹端点探测失败时保持零值，不影响主 usage probe 的持久化）。
+	AvailableResetCredits       int       `json:"available_reset_credits,omitempty"`
+	NearestResetCreditExpiresAt time.Time `json:"nearest_reset_credit_expires_at,omitempty"`
 }
 
 // ProbePolicy 定义状态缓存何时必须重新 fresh probe。
@@ -99,6 +104,9 @@ type ProbeSuccess struct {
 	ShortWindowResetAt   time.Time
 	LongWindowRemaining  *int64
 	Windows              []core.QuotaWindow
+	// AvailableResetCredits/NearestResetCreditExpiresAt：语义同 Entry 同名字段。
+	AvailableResetCredits       int
+	NearestResetCreditExpiresAt time.Time
 	// PreserveLongWindow：true 时在入参零值下保留已有 LongWindowResetAt（usage 路径）。
 	PreserveLongWindow bool
 	// PreserveXAIPolicy：true 时合并已有 xAI 策略字段（仅当入参零值）。
@@ -201,29 +209,31 @@ func (s *Store) MarkProbeSuccess(ctx context.Context, success ProbeSuccess) erro
 	defer s.mu.Unlock()
 	prev := s.entries[key]
 	entry := Entry{
-		SchemaVersion:        SchemaVersion,
-		Provider:             success.Provider,
-		ModelGroup:           entryModelGroup(success.ModelGroup),
-		AuthIndex:            authIndexKey(success.AuthIndex),
-		ObservedAt:           success.ObservedAt.UTC(),
-		ResetAt:              success.ResetAt.UTC(),
-		Remaining:            success.Remaining,
-		Source:               success.Source,
-		LastError:            "",
-		NextProbeAt:          success.NextProbeAt.UTC(),
-		AuthInvalid:          success.AuthInvalid,
-		PlanType:             success.PlanType,
-		PlanClass:            success.PlanClass,
-		QuotaFailCount:       success.QuotaFailCount,
-		FirstSuccessAt:       utcOrZero(success.FirstSuccessAt),
-		NextEligibleAt:       utcOrZero(success.NextEligibleAt),
-		XAIDepletedKind:      success.XAIDepletedKind,
-		QuotaFailTimes:       utcTimes(success.QuotaFailTimes),
-		LongWindowResetAt:    utcOrZero(success.LongWindowResetAt),
-		ShortWindowRemaining: cloneInt64Ptr(success.ShortWindowRemaining),
-		ShortWindowResetAt:   utcOrZero(success.ShortWindowResetAt),
-		LongWindowRemaining:  cloneInt64Ptr(success.LongWindowRemaining),
-		Windows:              cloneQuotaWindows(success.Windows),
+		SchemaVersion:               SchemaVersion,
+		Provider:                    success.Provider,
+		ModelGroup:                  entryModelGroup(success.ModelGroup),
+		AuthIndex:                   authIndexKey(success.AuthIndex),
+		ObservedAt:                  success.ObservedAt.UTC(),
+		ResetAt:                     success.ResetAt.UTC(),
+		Remaining:                   success.Remaining,
+		Source:                      success.Source,
+		LastError:                   "",
+		NextProbeAt:                 success.NextProbeAt.UTC(),
+		AuthInvalid:                 success.AuthInvalid,
+		PlanType:                    success.PlanType,
+		PlanClass:                   success.PlanClass,
+		QuotaFailCount:              success.QuotaFailCount,
+		FirstSuccessAt:              utcOrZero(success.FirstSuccessAt),
+		NextEligibleAt:              utcOrZero(success.NextEligibleAt),
+		XAIDepletedKind:             success.XAIDepletedKind,
+		QuotaFailTimes:              utcTimes(success.QuotaFailTimes),
+		LongWindowResetAt:           utcOrZero(success.LongWindowResetAt),
+		ShortWindowRemaining:        cloneInt64Ptr(success.ShortWindowRemaining),
+		ShortWindowResetAt:          utcOrZero(success.ShortWindowResetAt),
+		LongWindowRemaining:         cloneInt64Ptr(success.LongWindowRemaining),
+		Windows:                     cloneQuotaWindows(success.Windows),
+		AvailableResetCredits:       success.AvailableResetCredits,
+		NearestResetCreditExpiresAt: utcOrZero(success.NearestResetCreditExpiresAt),
 	}
 	if success.PreserveLongWindow && entry.LongWindowResetAt.IsZero() {
 		entry.LongWindowResetAt = prev.LongWindowResetAt
