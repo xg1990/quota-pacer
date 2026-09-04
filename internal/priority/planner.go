@@ -46,6 +46,10 @@ type ProbeEvidence struct {
 	XAINextEligibleAt *time.Time
 	// XAIQuotaFailCount: 连续额度类失败次数。
 	XAIQuotaFailCount int
+	// AvailableResetCredits 仅 Codex：当前 available 状态的银行化重置额度数量。
+	AvailableResetCredits int
+	// NearestResetCreditExpiresAt 仅 Codex：available 额度中最近的过期时间；nil 表示无可用额度。
+	NearestResetCreditExpiresAt *time.Time
 }
 
 // EvidenceStatus 标识本轮 probe evidence 对规划器是否可用。
@@ -87,6 +91,9 @@ type PlanItem struct {
 	Reason     string
 	// PacingScore 是排序时实际使用的 Pacing 健康度得分快照，供审计/展示使用。
 	PacingScore float64
+	// AvailableResetCredits/NearestResetCreditExpiresAt 语义同 ProbeEvidence 同名字段。
+	AvailableResetCredits       int
+	NearestResetCreditExpiresAt *time.Time
 }
 
 // Change 表示需要由后续 apply writer 写回宿主的 fresh 证据变更。
@@ -166,6 +173,8 @@ func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvi
 			item.ShortWindowRemaining = fresh.ShortWindowRemaining
 			item.ShortWindowResetAt = fresh.ShortWindowResetAt
 			item.LongWindowRemaining = fresh.LongWindowRemaining
+			item.AvailableResetCredits = fresh.AvailableResetCredits
+			item.NearestResetCreditExpiresAt = fresh.NearestResetCreditExpiresAt
 			item.EvidenceFresh = true
 
 			if isXAIAuthInvalid(credential, fresh) {
@@ -187,6 +196,8 @@ func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvi
 			item.ShortWindowRemaining = cached.ShortWindowRemaining
 			item.ShortWindowResetAt = cached.ShortWindowResetAt
 			item.LongWindowRemaining = cached.LongWindowRemaining
+			item.AvailableResetCredits = cached.AvailableResetCredits
+			item.NearestResetCreditExpiresAt = cached.NearestResetCreditExpiresAt
 			item.EvidenceFresh = false
 		}
 		items[index] = item
@@ -436,13 +447,50 @@ func windowPacingScore(remaining int64, resetAt time.Time, duration time.Duratio
 	return remainingRatio / timeRemainingRatio
 }
 
+// codexResetCreditExpiryWindow 是"额度即将过期"的判定阈值：available 额度的过期时间落在
+// 未来 14 天内（且尚未过期）时，视为"再不用就浪费"，需要更激进地消耗额度以便触发限流兑换。
+const codexResetCreditExpiryWindow = 14 * 24 * time.Hour
+
+// codexResetCreditBoostMultiplier 是命中提升条件时对 Remaining 施加的相对倍数（而非绝对
+// 百分点叠加）——windowPacingScore 对 remaining>=100 有专门的"满额天花板"分支，绝对值
+// +100 会让几乎所有有正余量的凭证瞬间撞进该分支、抹平彼此的相对紧急度差异；改为倍增
+// remainingRatio 只放大分子，让不同真实剩余量的凭证在提升后依然保有区分度。
+const codexResetCreditBoostMultiplier = 2
+
+// codexResetCreditBoostActive 判断是否应对该 Codex 凭证的本轮打分施加"即将过期额度"提升。
+// 仅限 Codex provider；要求存在 available 额度（AvailableResetCredits > 0）且其最近过期时间
+// 落在 (now, now+14d] 区间内——已过期（<=0）或超过 14 天的额度均不触发。
+func codexResetCreditBoostActive(item PlanItem, now time.Time) bool {
+	if planItemProvider(item) != core.ProviderCodex {
+		return false
+	}
+	if item.AvailableResetCredits <= 0 || item.NearestResetCreditExpiresAt == nil {
+		return false
+	}
+	untilExpiry := item.NearestResetCreditExpiresAt.Sub(now)
+	return untilExpiry > 0 && untilExpiry <= codexResetCreditExpiryWindow
+}
+
+// boostRemaining 在命中提升条件时对窗口剩余百分比做相对倍增；不封顶——windowPacingScore
+// 的 remaining>=100 分支本身就会按 remainingRatio 的实际值区分不同原始剩余量的凭证，
+// 提前封顶反而会让多个提升后凭证的分数重新退化为同一个值。
+func boostRemaining(remaining int64, boost bool) int64 {
+	if !boost {
+		return remaining
+	}
+	return remaining * codexResetCreditBoostMultiplier
+}
+
 // pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
 // 遍历凭据的所有有效额度窗口（Windows），取最紧张（Pacing 分数最低，即瓶颈窗口）的那个；
 // 若无多窗口结构，则尝试短窗/长窗 legacy 字段，最终回退到单窗口启发式。
+// Codex 凭证若命中"即将过期的银行化重置额度"提升条件（见 codexResetCreditBoostActive），
+// 会在计算各窗口分数前对 Remaining 做相对倍增，鼓励更激进地消耗以避免额度浪费。
 func pacingScore(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
-		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响
+		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响，也不受提升逻辑影响
 	}
+	boost := codexResetCreditBoostActive(item, now)
 
 	if len(item.Windows) > 0 {
 		scores := make([]float64, 0, len(item.Windows))
@@ -450,7 +498,7 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 			if w.Duration <= 0 || w.ResetAt.IsZero() {
 				continue
 			}
-			scores = append(scores, windowPacingScore(w.Remaining, w.ResetAt, w.Duration, now))
+			scores = append(scores, windowPacingScore(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
 		}
 		if len(scores) > 0 {
 			return slices.Min(scores)
@@ -459,25 +507,26 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 
 	scores := make([]float64, 0, 2)
 	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
+		scores = append(scores, windowPacingScore(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
 	}
 	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
+		scores = append(scores, windowPacingScore(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
 	}
 	if len(scores) > 0 {
 		return slices.Min(scores)
 	}
 
-	return legacyPacingScore(item, now)
+	return legacyPacingScore(item, now, boost)
 }
 
 // legacyPacingScore 是新字段未提供时（xAI 等）的单窗口启发式回退路径。
-func legacyPacingScore(item PlanItem, now time.Time) float64 {
-	remainingRatio := float64(*item.Remaining) / 100.0
+func legacyPacingScore(item PlanItem, now time.Time, boost bool) float64 {
+	remaining := boostRemaining(*item.Remaining, boost)
+	remainingRatio := float64(remaining) / 100.0
 
 	// 满额（Remaining=100%）账号优先处理：部分账号在额度周期 reset 后不会立即激活，
 	// 真实计费窗口从首次消费才开始计时，此时按剩余时间比例计分会把它们排到最后。
-	if *item.Remaining >= 100 {
+	if remaining >= 100 {
 		return remainingRatio / 0.001
 	}
 

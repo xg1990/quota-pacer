@@ -46,7 +46,31 @@ func (p Prober) Probe(ctx context.Context, request ProbeRequest) ProbeResult {
 	result := ParseWhamUsage(response.Body, observedAt)
 	result.Provider = request.Provider
 	result.AuthIndex = request.AuthIndex
+	if result.Status == StatusReady {
+		p.attachResetCredits(ctx, request, &result)
+	}
 	return result
+}
+
+// attachResetCredits best-effort 拉取姊妹端点 wham/rate-limit-reset-credits，把银行化重置额度
+// 信号合入主 usage probe 结果。该端点探测失败或解析不出信号时静默跳过，不影响主 probe 的
+// StatusReady 结论——重置额度只是打分时的加分信号，不是排序必需的核心证据。
+func (p Prober) attachResetCredits(ctx context.Context, request ProbeRequest, result *ProbeResult) {
+	response, err := p.host.HTTPDo(ctx, host.HTTPRequest{
+		AuthIndex: request.AuthIndex,
+		Method:    http.MethodGet,
+		URL:       WhamResetCreditsURL,
+		Headers:   probeHeaders(request),
+	})
+	if err != nil || response.StatusCode != http.StatusOK {
+		return
+	}
+	summary, ok := parseWhamResetCredits(response.Body)
+	if !ok {
+		return
+	}
+	result.AvailableResetCredits = int(summary.availableCount)
+	result.NearestResetCreditExpiresAt = summary.nearestExpiresAt
 }
 
 func failedProbe(request ProbeRequest, observedAt time.Time, message string) ProbeResult {

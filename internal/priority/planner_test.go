@@ -793,7 +793,6 @@ func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_AnyWindowDepletedIsZero(t *
 	}
 }
 
-
 func TestPlanFreshOnly_CachedEvidencePopulatesPacingScoreAndZeroChanges(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	shortReset := now.Add(4 * time.Hour)
@@ -934,5 +933,190 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 	}
 	if cachedItem.PacingScore <= 0 {
 		t.Errorf("expected cached item to have valid PacingScore > 0, got %.6f", cachedItem.PacingScore)
+	}
+}
+
+// --- Codex banked reset-credit "即将过期" pacing boost ---
+// 用户需求：Codex 若存在一条 available 状态的银行化重置额度（可手动兑换的一次性重置），
+// 且其 expiresAt 落在未来 14 天内（即将作废），应更激进地消耗额度而非保守 pacing，
+// 避免额度白白过期浪费。实现为对 Remaining 做相对倍增（而非绝对 +100 百分点），
+// 详见 planner.go 中 codexResetCreditBoostActive/boostRemaining 的注释说明。
+
+func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.Duration) PlanItem {
+	rem := remaining
+	return PlanItem{
+		Credential: core.Credential{AuthIndex: "auth-codex-credit", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+		Remaining:  &rem,
+		Windows:    []core.QuotaWindow{{Name: "weekly", Duration: duration, Remaining: remaining, ResetAt: time.Time{}.Add(resetIn)}},
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_ExpiringWithin14Days(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(5 * 24 * time.Hour) // 5 天后过期，落在 14 天窗口内
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	boosted := pacingScore(item, now)
+	want := baseline * 2
+	if diff := boosted - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected boosted score %.6f (2x baseline %.6f), got %.6f", want, baseline, boosted)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_ExpiringBeyond14Days(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(20 * 24 * time.Hour) // 20 天后过期，超出 14 天窗口
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected unboosted score %.6f (beyond 14d window), got %.6f", baseline, got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_NoAvailableCredit(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(5 * 24 * time.Hour)
+	item.AvailableResetCredits = 0 // 无可用额度
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected unboosted score %.6f when AvailableResetCredits=0, got %.6f", baseline, got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_NonCodexProviderUnaffected(t *testing.T) {
+	now := time.Time{}
+	rem := int64(30)
+	item := PlanItem{
+		Credential: core.Credential{AuthIndex: "auth-claude-credit", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		Remaining:  &rem,
+		Windows:    []core.QuotaWindow{{Name: "weekly", Duration: 168 * time.Hour, Remaining: 30, ResetAt: now.Add(84 * time.Hour)}},
+	}
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(5 * 24 * time.Hour)
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected non-Codex provider unaffected by reset-credit boost, baseline=%.6f got=%.6f", baseline, got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_DepletedRemainingStaysZero(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(0, 84*time.Hour, 168*time.Hour)
+	expiresAt := now.Add(5 * 24 * time.Hour)
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	if got := pacingScore(item, now); got != 0 {
+		t.Errorf("expected score 0 for depleted remaining even with imminent-expiry credit, got %.6f", got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_AlreadyExpiredCreditNotBoosted(t *testing.T) {
+	now := time.Time{}.Add(30 * 24 * time.Hour)
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	item.Windows[0].ResetAt = now.Add(84 * time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(-time.Hour) // 已过期
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected unboosted score %.6f for already-expired credit, got %.6f", baseline, got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_BoundaryExactly14Days(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(14 * 24 * time.Hour) // 精确 14 天：应触发提升
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	want := baseline * 2
+	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected boosted score %.6f at exactly-14-day boundary, got %.6f", want, got)
+	}
+}
+
+func TestPacingScore_CodexResetCreditBoost_BoundaryJustOver14Days(t *testing.T) {
+	now := time.Time{}
+	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
+	baseline := pacingScore(item, now)
+
+	expiresAt := now.Add(14*24*time.Hour + time.Minute) // 超出 14 天一分钟：不应触发
+	item.AvailableResetCredits = 1
+	item.NearestResetCreditExpiresAt = &expiresAt
+
+	got := pacingScore(item, now)
+	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected unboosted score %.6f just beyond 14-day boundary, got %.6f", baseline, got)
+	}
+}
+
+// TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence 验证 AvailableResetCredits/
+// NearestResetCreditExpiresAt 能从 ProbeEvidence 正确贯穿到 PlanItem 并驱动 PacingScore 提升。
+func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T) {
+	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
+	rem := int64(30)
+	resetAt := now.Add(84 * time.Hour)
+	expiresAt := now.Add(5 * 24 * time.Hour)
+
+	credentials := []core.Credential{
+		{Name: "codex-credit", AuthIndex: "auth-codex-credit", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:                    core.ProviderCodex,
+			AuthIndex:                   "auth-codex-credit",
+			ObservedAt:                  now,
+			Remaining:                   &rem,
+			Windows:                     []core.QuotaWindow{{Name: "weekly", Duration: 168 * time.Hour, Remaining: 30, ResetAt: resetAt}},
+			AvailableResetCredits:       1,
+			NearestResetCreditExpiresAt: &expiresAt,
+			Freshness:                   core.FreshnessFresh,
+			ProbeStatus:                 core.ProbeStatusReady,
+			Status:                      EvidenceStatusReady,
+			PlanType:                    core.PlanTypePlus,
+			EvidenceFresh:               true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
+	}
+	item := plan.Items[0]
+	if item.AvailableResetCredits != 1 {
+		t.Errorf("expected AvailableResetCredits threaded through to PlanItem, got %d", item.AvailableResetCredits)
+	}
+	if item.NearestResetCreditExpiresAt == nil || !item.NearestResetCreditExpiresAt.Equal(expiresAt) {
+		t.Errorf("expected NearestResetCreditExpiresAt threaded through, got %v", item.NearestResetCreditExpiresAt)
+	}
+	want := (0.30 / (84.0 / 168.0)) * 2
+	if diff := item.PacingScore - want; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected boosted PacingScore %.6f, got %.6f", want, item.PacingScore)
 	}
 }

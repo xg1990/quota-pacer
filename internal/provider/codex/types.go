@@ -9,6 +9,11 @@ import (
 // WhamUsageURL 是 ChatGPT wham usage 的宿主代理目标地址。
 const WhamUsageURL = "https://chatgpt.com/backend-api/wham/usage"
 
+// WhamResetCreditsURL 是 ChatGPT banked rate-limit reset credits 的姊妹端点地址。
+// 未公开文档化（逆向工程确认），承载用户可手动兑换的"重置额度"库存，与被动的
+// primary/secondary_window 定时重置是完全独立的两套机制。
+const WhamResetCreditsURL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
+
 // WindowType 标识 wham usage 响应中的额度窗口类型。
 type WindowType string
 
@@ -50,7 +55,11 @@ type ProbeResult struct {
 	ProbeStatus          core.ProbeStatus
 	Status               Status
 	PlanType             core.PlanType
-	Error                string
+	// AvailableResetCredits: 当前状态为 available 的银行化重置额度数量（best-effort，姊妹端点探测失败时为 0）。
+	AvailableResetCredits int
+	// NearestResetCreditExpiresAt: 所有 available 额度中最近的过期时间；nil 表示无可用额度或未探测到。
+	NearestResetCreditExpiresAt *time.Time
+	Error                       string
 }
 
 // ProbeRequest 是执行 wham usage fresh probe 所需的宿主凭证上下文。

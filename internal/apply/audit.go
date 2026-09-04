@@ -36,15 +36,19 @@ type SnapshotItem struct {
 	Reason        string `json:"reason"`
 	// PlanType/Remaining/ResetAt/LongWindowResetAt/PacingScore 是 pace 计算表格所需的原始输入与结果，
 	// 均为非敏感数值/枚举/时间字段，无需脱敏。
-	PlanType             string     `json:"plan_type"`
-	Remaining            *int64     `json:"remaining"`
-	ResetAt              *time.Time `json:"reset_at"`
-	LongWindowResetAt    *time.Time `json:"long_window_reset_at"`
+	PlanType             string             `json:"plan_type"`
+	Remaining            *int64             `json:"remaining"`
+	ResetAt              *time.Time         `json:"reset_at"`
+	LongWindowResetAt    *time.Time         `json:"long_window_reset_at"`
 	ShortWindowRemaining *int64             `json:"short_window_remaining"`
 	ShortWindowResetAt   *time.Time         `json:"short_window_reset_at"`
 	LongWindowRemaining  *int64             `json:"long_window_remaining"`
 	Windows              []core.QuotaWindow `json:"windows,omitempty"`
 	PacingScore          float64            `json:"pacing_score"`
+	// AvailableResetCredits/NearestResetCreditExpiresAt：仅 Codex，供 pace 计算表格展示
+	// "即将过期额度加速消耗"提升是否命中，非敏感数值/时间字段，无需脱敏。
+	AvailableResetCredits       int        `json:"available_reset_credits,omitempty"`
+	NearestResetCreditExpiresAt *time.Time `json:"nearest_reset_credit_expires_at,omitempty"`
 }
 
 // SnapshotChange 是单个写入候选的脱敏审计视图。
@@ -121,24 +125,26 @@ func newAuditEvent(plan priority.Plan) AuditEvent {
 func snapshotItem(item priority.PlanItem) SnapshotItem {
 	credential := item.Credential
 	return SnapshotItem{
-		Name:              redactString(credential.Name),
-		AuthIndex:         redactString(credential.AuthIndex),
-		Provider:          redactString(string(credential.Provider)),
-		Type:              redactString(string(credential.Type)),
-		Status:            redactString(string(credential.Status)),
-		Current:           target(credential.Priority, credential.Disabled),
-		Target:            target(item.Priority, item.Disabled),
-		EvidenceFresh:     item.EvidenceFresh,
-		Reason:            redactString(item.Reason),
-		PlanType:             string(item.PlanType),
-		Remaining:            item.Remaining,
-		ResetAt:              item.ResetAt,
-		LongWindowResetAt:    item.LongWindowResetAt,
-		ShortWindowRemaining: item.ShortWindowRemaining,
-		ShortWindowResetAt:   item.ShortWindowResetAt,
-		LongWindowRemaining:  item.LongWindowRemaining,
-		Windows:              item.Windows,
-		PacingScore:          item.PacingScore,
+		Name:                        redactString(credential.Name),
+		AuthIndex:                   redactString(credential.AuthIndex),
+		Provider:                    redactString(string(credential.Provider)),
+		Type:                        redactString(string(credential.Type)),
+		Status:                      redactString(string(credential.Status)),
+		Current:                     target(credential.Priority, credential.Disabled),
+		Target:                      target(item.Priority, item.Disabled),
+		EvidenceFresh:               item.EvidenceFresh,
+		Reason:                      redactString(item.Reason),
+		PlanType:                    string(item.PlanType),
+		Remaining:                   item.Remaining,
+		ResetAt:                     item.ResetAt,
+		LongWindowResetAt:           item.LongWindowResetAt,
+		ShortWindowRemaining:        item.ShortWindowRemaining,
+		ShortWindowResetAt:          item.ShortWindowResetAt,
+		LongWindowRemaining:         item.LongWindowRemaining,
+		Windows:                     item.Windows,
+		PacingScore:                 item.PacingScore,
+		AvailableResetCredits:       item.AvailableResetCredits,
+		NearestResetCreditExpiresAt: item.NearestResetCreditExpiresAt,
 	}
 }
 
