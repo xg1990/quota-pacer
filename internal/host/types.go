@@ -24,19 +24,25 @@ type Header map[string][]string
 
 // AuthFile 是 host.auth.list 返回的最小凭证记录。
 type AuthFile struct {
-	Name            string          `json:"name"`
-	AuthIndex       string          `json:"auth_index"`
-	Type            string          `json:"type,omitempty"`
-	Provider        string          `json:"provider,omitempty"`
-	Status          string          `json:"status,omitempty"`
-	Disabled        bool            `json:"disabled"`
-	Unavailable     bool            `json:"unavailable"`
-	Priority        int             `json:"priority"`
-	PriorityMissing bool            `json:"-"`
-	Account         string          `json:"account,omitempty"`
-	Email           string          `json:"email,omitempty"`
-	IDToken         IDTokenClaims   `json:"id_token,omitempty"`
-	RawJSON         json.RawMessage `json:"-"`
+	Name            string `json:"name"`
+	AuthIndex       string `json:"auth_index"`
+	Type            string `json:"type,omitempty"`
+	Provider        string `json:"provider,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Disabled        bool   `json:"disabled"`
+	Unavailable     bool   `json:"unavailable"`
+	Priority        int    `json:"priority"`
+	PriorityMissing bool   `json:"-"`
+	// Weight/WeightMissing 镜像 Priority/PriorityMissing——CPA 的
+	// host.auth.list 回调当前尚未在返回体里携带 weight 字段（截至 v7.2.151），
+	// 所以这两个字段目前恒为零值/true；一旦 CPA 上游补上该字段，这里会自动
+	// 透传，不需要额外改动。
+	Weight        int             `json:"weight"`
+	WeightMissing bool            `json:"-"`
+	Account       string          `json:"account,omitempty"`
+	Email         string          `json:"email,omitempty"`
+	IDToken       IDTokenClaims   `json:"id_token,omitempty"`
+	RawJSON       json.RawMessage `json:"-"`
 }
 
 // UnmarshalJSON 保留 host.auth.list 返回的完整凭证 JSON，供 host.auth.save 写回时避免丢字段。
@@ -53,6 +59,8 @@ func (f *AuthFile) UnmarshalJSON(data []byte) error {
 	*f = AuthFile(decoded)
 	_, priorityPresent := fields["priority"]
 	f.PriorityMissing = !priorityPresent
+	_, weightPresent := fields["weight"]
+	f.WeightMissing = !weightPresent
 	f.RawJSON = append(json.RawMessage(nil), data...)
 	return nil
 }
@@ -182,6 +190,7 @@ type API interface {
 	GetRuntime(ctx context.Context, authIndex string) (RuntimeAuth, error)
 	SaveAuth(ctx context.Context, name string, doc json.RawMessage) error
 	PatchPriority(ctx context.Context, authIndex string, priority int) error
+	PatchWeight(ctx context.Context, authIndex string, weight int) error
 	PatchDisabled(ctx context.Context, name string, disabled bool) error
 	HTTPDo(ctx context.Context, req HTTPRequest) (HTTPResponse, error)
 }

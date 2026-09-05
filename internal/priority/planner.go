@@ -2,6 +2,7 @@ package priority
 
 import (
 	"cmp"
+	"math"
 	"slices"
 	"time"
 
@@ -72,8 +73,11 @@ const (
 
 // PlanItem 表示单个凭证在本轮规划后的目标状态。
 type PlanItem struct {
-	Credential        core.Credential
-	Priority          int
+	Credential core.Credential
+	Priority   int
+	// Weight 是本轮为该凭证算出的 CPA 加权轮询权重（仅对共享最高 priority tier
+	// 的健康凭证有意义，其余凭证保持零值）。语义与算法见 weightFromPacingScore。
+	Weight            int
 	Disabled          bool
 	PlanType          core.PlanType
 	ResetAt           *time.Time
@@ -98,8 +102,10 @@ type PlanItem struct {
 
 // Change 表示需要由后续 apply writer 写回宿主的 fresh 证据变更。
 type Change struct {
-	Credential    core.Credential
-	Priority      int
+	Credential core.Credential
+	Priority   int
+	// Weight 镜像 PlanItem.Weight——共享最高 priority tier 的健康凭证才有非零值。
+	Weight        int
 	Disabled      bool
 	EvidenceFresh bool
 	Reason        string
@@ -213,30 +219,97 @@ func isXAICredential(credential core.Credential) bool {
 	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderXAI
 }
 
+// weightScaleReference is the reference weight assigned to a fresh-positive
+// tier member with a full [0,1] remaining-pace headroom (weightFromHeadroom).
+// Kept well below CPA's [0, 1_000_000] weight ceiling (credentialweight.Max)
+// so tier weights stay human-readable in the CPA management UI (e.g.
+// 1000/340/12 instead of unwieldy six-digit numbers) while leaving ample
+// headroom (1000x) for future fine-grained tuning.
+const weightScaleReference = 1000
+
+// weightFloor is the minimum weight ever assigned to a fresh-positive tier
+// member. CPA's WeightedRoundRobinSelector excludes any credential with
+// weight<=0 from the rotation entirely (its positiveWeightAuths filter) —
+// weight 0 is not "a tiny trickle of traffic", it is "none at all". Flooring
+// at 1 guarantees every currently-healthy credential in the shared tier
+// keeps at least a minimal share — including one that has already burned
+// past its pace target (remainingHeadroom floors to 0 for it) — so it is
+// never fully starved out of the rotation.
+const weightFloor = 1
+
+// weightFromHeadroom maps a tier member's remaining-pace headroom (see
+// remainingHeadroom, already floored to [0,1]) to an integer CPA weight,
+// linearly proportional to weightScaleReference, floored at weightFloor.
+// headroom=1.0 (full remaining-pace headroom) -> weightScaleReference;
+// headroom=0 (already burned past pace target, no headroom left) still maps
+// to weightFloor rather than 0, so it keeps a minimal share of traffic
+// instead of being excluded from CPA's weighted rotation entirely.
+func weightFromHeadroom(headroom float64) int {
+	weight := int(math.Round(weightScaleReference * headroom))
+	if weight < weightFloor {
+		return weightFloor
+	}
+	return weight
+}
+
+// planFreshPositive assigns every fresh-positive candidate (this round's
+// live probe evidence, Remaining > 0) to the SAME shared top priority,
+// replacing the old strictly-unique-descending-priority ranking. Relative
+// health is now expressed entirely through Weight (weightFromHeadroom, driven
+// by remainingHeadroom — "距离配速目标用量，还可以多用掉多少百分比" — not by
+// how the pacing score ranks against the tier's other members), which CPA's
+// weighted-round-robin scheduler uses to proportionally split concurrent
+// traffic among same-priority credentials — see ensureUniquePriorities for
+// why this intentional sharing does not get "corrected" back into unique
+// slots.
 func planFreshPositive(items []PlanItem, options Options) {
 	candidates := positiveCandidates(items)
-	slices.SortStableFunc(candidates, func(left int, right int) int {
-		return compareCandidates(items[left], items[right], options)
-	})
-	startPriority := normalizedMaxPriority(options.MaxPriority)
-	if startPriority < 1 {
-		startPriority = 100
+	if len(candidates) == 0 {
+		return
 	}
-	priority := startPriority
+	sharedPriority := normalizedMaxPriority(options.MaxPriority)
+	if sharedPriority < 1 {
+		sharedPriority = 100
+	}
+
 	for _, itemIndex := range candidates {
-		items[itemIndex].Priority = priority
+		headroom := remainingHeadroom(items[itemIndex], options.Now)
+		items[itemIndex].Priority = sharedPriority
+		items[itemIndex].Weight = weightFromHeadroom(headroom)
 		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
 		items[itemIndex].Disabled = false
 		items[itemIndex].Reason = "fresh remaining positive"
-		priority--
-		if priority < 1 {
-			priority = 1
-		}
 	}
 }
 
-// ensureUniquePriorities 保证跨账号全局启用态 priority>=1 的槽位唯一。
-// 参与者包括：本轮 fresh 正额度、以及仍占用正优先级的无 fresh 同伴（历史局部写回残留）。
+// isFreshPositiveTierMember reports whether item belongs to this round's
+// shared top-priority tier assigned by planFreshPositive (fresh evidence,
+// Remaining > 0). Multiple such items intentionally sharing the same
+// priority value is by design — see planFreshPositive and
+// ensureUniquePriorities — not a collision to correct.
+func isFreshPositiveTierMember(item PlanItem) bool {
+	return item.EvidenceFresh && item.Remaining != nil && *item.Remaining > 0
+}
+
+// sharedTierPriority returns this round's shared top-priority value and
+// whether any fresh-positive tier member exists in group. Every tier member
+// carries the identical priority assigned by planFreshPositive, so the
+// first one found is sufficient.
+func sharedTierPriority(items []PlanItem, group []int) (int, bool) {
+	for _, index := range group {
+		if isFreshPositiveTierMember(items[index]) {
+			return items[index].Priority, true
+		}
+	}
+	return 0, false
+}
+
+// ensureUniquePriorities 保证跨账号全局启用态 priority>=1 的槽位在"非本轮共享
+// 健康 tier"成员之间唯一。本轮共享 tier 内多个凭证持有相同的最高 priority 是
+// planFreshPositive 的设计意图（配合 Weight 做同 tier 内加权分流），本函数不再
+// 把这种情况当作冲突去纠正；但如果某个陈旧/无 fresh 证据的遗留凭证仍占用着
+// tier 的那个 priority 槽位，或多个陈旧凭证彼此 priority 冲突，仍然按原逻辑
+// 重新分配——只是排他区间从"tier 槽位以下"开始，不会挤占 tier 本身。
 // 不改写 disabled 或 priority<=0（含 depleted 0 / auth invalid -1）的凭证。
 func ensureUniquePriorities(items []PlanItem, options Options) {
 	group := make([]int, 0, len(items))
@@ -252,20 +325,39 @@ func ensureUniquePriorities(items []PlanItem, options Options) {
 	if !hasFreshPositive(items, group) {
 		return
 	}
-	if !hasPriorityCollision(items, group) && !needsStartRealign(items, group, options) {
+
+	tierPriority, hasTier := sharedTierPriority(items, group)
+	nonTierGroup := make([]int, 0, len(group))
+	for _, index := range group {
+		if !isFreshPositiveTierMember(items[index]) {
+			nonTierGroup = append(nonTierGroup, index)
+		}
+	}
+
+	if !hasPriorityCollision(items, nonTierGroup, tierPriority, hasTier) && !needsStartRealign(items, group, options) {
 		return
 	}
-	slices.SortStableFunc(group, func(left int, right int) int {
+	slices.SortStableFunc(nonTierGroup, func(left int, right int) int {
 		return compareUniquenessCandidates(items[left], items[right], options)
 	})
-	assigned := make(map[int]int, len(group))
-	used := make(map[int]struct{}, len(group))
+	assigned := make(map[int]int, len(nonTierGroup))
+	used := make(map[int]struct{}, len(nonTierGroup)+1)
+	if hasTier {
+		// 预占 tier 的 priority 槽位，防止非 tier 成员被重新分配到同一个值。
+		used[tierPriority] = struct{}{}
+	}
 	startPriority := normalizedMaxPriority(options.MaxPriority)
 	if startPriority < 1 {
 		startPriority = 100
 	}
+	if hasTier && tierPriority <= startPriority {
+		startPriority = tierPriority - 1
+		if startPriority < 1 {
+			startPriority = 1
+		}
+	}
 	priority := startPriority
-	for _, itemIndex := range group {
+	for _, itemIndex := range nonTierGroup {
 		nextPriority := nextAvailablePriority(priority, used)
 		assigned[itemIndex] = nextPriority
 		used[nextPriority] = struct{}{}
@@ -274,7 +366,7 @@ func ensureUniquePriorities(items []PlanItem, options Options) {
 			priority = 1
 		}
 	}
-	for _, itemIndex := range group {
+	for _, itemIndex := range nonTierGroup {
 		nextPriority := assigned[itemIndex]
 		if items[itemIndex].Priority != nextPriority {
 			if !items[itemIndex].EvidenceFresh {
@@ -316,9 +408,16 @@ func hasFreshPositive(items []PlanItem, group []int) bool {
 	return false
 }
 
-func hasPriorityCollision(items []PlanItem, group []int) bool {
-	seen := make(map[int]struct{}, len(group))
-	for _, index := range group {
+// hasPriorityCollision 只检查非 tier 成员之间、以及非 tier 成员与共享 tier
+// priority 槽位之间的冲突。多个 tier 成员彼此共享同一个 tierPriority 是
+// planFreshPositive 的设计意图，不在这里被当作冲突处理（调用方已把它们从
+// nonTierGroup 中排除）。
+func hasPriorityCollision(items []PlanItem, nonTierGroup []int, tierPriority int, hasTier bool) bool {
+	seen := make(map[int]struct{}, len(nonTierGroup)+1)
+	if hasTier {
+		seen[tierPriority] = struct{}{}
+	}
+	for _, index := range nonTierGroup {
 		priority := items[index].Priority
 		if priority > maxEnabledPriority {
 			return true
@@ -573,6 +672,137 @@ func legacyPacingScore(item PlanItem, now time.Time, boost bool) float64 {
 	return remainingRatio / timeRemainingRatio
 }
 
+// windowRemainingHeadroom 计算单个窗口的"配速富余度"：距离配速目标用量，还可以多用掉多少
+// 配额比例（0..1），而不是距离硬上限（100%）还剩多少。
+//
+// 配速目标已用比例 = 1 - timeRemainingRatio（这个窗口已经流逝的时间比例，假设配额应随时间
+// 匀速消耗，此刻"本该"用掉这么多）；实际已用比例 = 1 - remainingRatio。两者之差
+// （配速目标已用比例 - 实际已用比例，等价于 remainingRatio - timeRemainingRatio）就是
+// "追上配速目标之前，还能多用掉多少百分比"。若实际已用比例已经追上或超过配速目标（差值为
+// 负），说明没有富余空间了，floor 到 0——注意这里只把"没有富余"floor 到 0，最终写回 CPA
+// 的整数 weight 仍会在 weightFromHeadroom 里被 floor 到 weightFloor（而非 0），避免这类
+// "已落后于配速"的账号被 WeightedRoundRobinSelector 的 weight<=0 过滤器踢出轮转。
+//
+// 两处边界特判（均直接给满 headroom=1.0，不计算时间比例）：
+//   - remaining>=100：额度周期到点但计费尚未真正开始（部分 provider 的计费窗口从首次消费才
+//     开始计时），此时剩余时间比例不可信，视同"完全没有落后于配速"。
+//   - timeRemaining<=0：reset 时间已过但 remaining 尚未刷新（陈旧/边界数据），同样不信任此刻
+//     算出的时间比例，按满 headroom 处理。
+func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
+	if remaining >= 100 {
+		return 1.0
+	}
+	remainingRatio := float64(remaining) / 100.0
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return 1.0
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(duration)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	headroom := remainingRatio - timeRemainingRatio
+	if headroom < 0 {
+		headroom = 0
+	}
+	return headroom
+}
+
+// remainingHeadroom 是 windowRemainingHeadroom 的多窗口/多字段入口，窗口来源级联与瓶颈窗口
+// 选取（多窗口时取 headroom 最小的那个）完全复用 pacingScore 的结构：Windows 列表 ->
+// ShortWindowRemaining/LongWindowRemaining 短长窗口对 -> legacy 单窗口回退
+// （legacyRemainingHeadroom）。同样对 Codex "即将过期银行化重置额度" 应用 boostRemaining。
+func remainingHeadroom(item PlanItem, now time.Time) float64 {
+	if item.Remaining == nil || *item.Remaining <= 0 {
+		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier，这里仅保持与 pacingScore 对称
+	}
+	boost := codexResetCreditBoostActive(item, now)
+
+	if len(item.Windows) > 0 {
+		headrooms := make([]float64, 0, len(item.Windows))
+		for _, w := range item.Windows {
+			if w.Duration <= 0 || w.ResetAt.IsZero() {
+				continue
+			}
+			headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
+		}
+		if len(headrooms) > 0 {
+			return slices.Min(headrooms)
+		}
+	}
+
+	headrooms := make([]float64, 0, 2)
+	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
+		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
+	}
+	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
+		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
+	}
+	if len(headrooms) > 0 {
+		return slices.Min(headrooms)
+	}
+
+	return legacyRemainingHeadroom(item, now, boost)
+}
+
+// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径，窗口/周期总长的
+// 确定逻辑与 legacyPacingScore 完全一致，只是最终分数从"除法"换成"减法"。
+func legacyRemainingHeadroom(item PlanItem, now time.Time, boost bool) float64 {
+	remaining := boostRemaining(*item.Remaining, boost)
+	if remaining >= 100 {
+		return 1.0
+	}
+	remainingRatio := float64(remaining) / 100.0
+
+	var resetAt *time.Time
+	var totalWindow time.Duration
+
+	if item.LongWindowResetAt != nil && (item.ResetAt == nil || item.ResetAt.Equal(*item.LongWindowResetAt)) {
+		resetAt = item.LongWindowResetAt
+		totalWindow = longWindowDuration
+	} else if item.ResetAt != nil {
+		resetAt = item.ResetAt
+		timeRemaining := resetAt.Sub(now)
+		if timeRemaining > 48*time.Hour {
+			totalWindow = longWindowDuration
+		} else if timeRemaining > 6*time.Hour {
+			totalWindow = 24 * time.Hour
+		} else {
+			totalWindow = shortWindowDuration
+		}
+	}
+
+	if resetAt == nil || totalWindow <= 0 {
+		// 没有任何可用的重置时间信息，无法推算配速目标，把全部剩余都当作富余。
+		return remainingRatio
+	}
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return 1.0
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(totalWindow)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	headroom := remainingRatio - timeRemainingRatio
+	if headroom < 0 {
+		headroom = 0
+	}
+	return headroom
+}
+
 func paidRank(planType core.PlanType) int {
 	switch planType {
 	case core.PlanTypeTeam, core.PlanTypePlus, core.PlanTypePro:
@@ -636,6 +866,7 @@ func changes(items []PlanItem, options Options) []Change {
 			result = append(result, Change{
 				Credential: item.Credential,
 				Priority:   item.Priority,
+				Weight:     item.Weight,
 				Disabled:   item.Disabled,
 				// ForceWrite 同伴无本轮 probe，但必须通过 apply 的 EvidenceFresh 写入门闸。
 				EvidenceFresh: item.EvidenceFresh || item.ForceWrite,
@@ -658,6 +889,12 @@ func shouldChange(item PlanItem, options Options) bool {
 		return abs(item.Priority-item.Credential.Priority) >= normalizedMinChange(options.MinChange) ||
 			item.Disabled != item.Credential.Disabled ||
 			item.Credential.PriorityMissing
+	}
+	if item.Reason == "fresh remaining positive" {
+		// tier 内本轮 Priority 保持不变，但 Weight 需要跟随 pacing score 每轮
+		// 刷新写回；CPA host.auth.list 当前不回传 weight 字段，无法读回当前值
+		// 做等值比较，因此 tier 成员统一按“本轮总是变化”处理。
+		return true
 	}
 	if item.Credential.PriorityMissing {
 		return true

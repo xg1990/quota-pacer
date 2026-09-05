@@ -152,12 +152,16 @@ type Credential struct {
 	Unavailable     bool
 	Priority        int
 	PriorityMissing bool
-	Account         string
-	Email           string
-	PlanType        PlanType
-	Freshness       Freshness
-	ProbeStatus     ProbeStatus
-	RawJSON         json.RawMessage
+	// Weight/WeightMissing 镜像 Priority/PriorityMissing 语义，供 CPA
+	// weighted-round-robin 调度策略在同一 priority tier 内按比例分流。
+	Weight        int
+	WeightMissing bool
+	Account       string
+	Email         string
+	PlanType      PlanType
+	Freshness     Freshness
+	ProbeStatus   ProbeStatus
+	RawJSON       json.RawMessage
 }
 
 // WithProbe 返回带有探测元数据的新凭证快照，不修改原始优先级或禁用状态。

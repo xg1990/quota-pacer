@@ -16,11 +16,17 @@ import (
 
 type recordingApplyHost struct {
 	priorityWrites int
+	weightWrites   int
 	disabledWrites int
 }
 
 func (h *recordingApplyHost) PatchPriority(_ context.Context, _ string, _ int) error {
 	h.priorityWrites++
+	return nil
+}
+
+func (h *recordingApplyHost) PatchWeight(_ context.Context, _ string, _ int) error {
+	h.weightWrites++
 	return nil
 }
 
@@ -32,7 +38,7 @@ func (h *recordingApplyHost) PatchDisabled(_ context.Context, _ string, _ bool) 
 type recordingApplyAuditor struct{}
 
 func (recordingApplyAuditor) SaveSnapshot(context.Context, apply.PlanSnapshot) error { return nil }
-func (recordingApplyAuditor) RecordEvent(context.Context, apply.AuditEvent) error     { return nil }
+func (recordingApplyAuditor) RecordEvent(context.Context, apply.AuditEvent) error    { return nil }
 
 func TestPreserveProbeFailureState(t *testing.T) {
 	credential := core.Credential{

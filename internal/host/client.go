@@ -97,6 +97,26 @@ func (c *Client) PatchPriority(ctx context.Context, authIndex string, priority i
 	return nil
 }
 
+// PatchWeight 通过 host.auth.get 暴露的物理凭证路径仅更新 weight 字段——与
+// PatchPriority 完全平行的实现，写入 CPA 已原生支持的顶层 "weight" 字段
+// （credentialweight.AttributeWeight），供 CPA 的 weighted-round-robin
+// 调度策略在同一 priority tier 内做比例分流。
+func (c *Client) PatchWeight(ctx context.Context, authIndex string, weight int) error {
+	trimmed, err := stableName(authIndex)
+	if err != nil {
+		return err
+	}
+	document, err := c.GetAuth(ctx, trimmed)
+	if err != nil {
+		return err
+	}
+	err = patchWeightDocument(ctx, document, weight)
+	if err != nil {
+		return fmt.Errorf("patch weight: %w", err)
+	}
+	return nil
+}
+
 // PatchDisabled 通过 host.auth.get 暴露的物理凭证路径仅更新 disabled 字段。
 func (c *Client) PatchDisabled(ctx context.Context, name string, disabled bool) error {
 	trimmed, err := stableName(name)
@@ -238,6 +258,36 @@ func patchPriorityBytes(raw []byte, priority int) ([]byte, error) {
 		return nil, fmt.Errorf("encode priority: %w", err)
 	}
 	return patchTopLevelFieldBytes(raw, "priority", encodedPriority)
+}
+
+func patchWeightDocument(ctx context.Context, document AuthDocument, weight int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	path := strings.TrimSpace(document.Path)
+	if path == "" {
+		return fmt.Errorf("%w: auth document path is required", ErrInvalidRequest)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read auth document: %w", err)
+	}
+	patched, err := patchWeightBytes(raw, weight)
+	if err != nil {
+		return err
+	}
+	if err := writeFileAtomic(ctx, path, patched); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+func patchWeightBytes(raw []byte, weight int) ([]byte, error) {
+	encodedWeight, err := json.Marshal(weight)
+	if err != nil {
+		return nil, fmt.Errorf("encode weight: %w", err)
+	}
+	return patchTopLevelFieldBytes(raw, "weight", encodedWeight)
 }
 
 func patchDisabledDocument(ctx context.Context, document AuthDocument, disabled bool) error {

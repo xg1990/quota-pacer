@@ -61,9 +61,10 @@ type SnapshotChange struct {
 	Reason        string `json:"reason"`
 }
 
-// Target 表示凭证的优先级和禁用目标状态。
+// Target 表示凭证的优先级、权重和禁用目标状态。
 type Target struct {
 	Priority int  `json:"priority"`
+	Weight   int  `json:"weight,omitempty"`
 	Disabled bool `json:"disabled"`
 }
 
@@ -130,8 +131,8 @@ func snapshotItem(item priority.PlanItem) SnapshotItem {
 		Provider:                    redactString(string(credential.Provider)),
 		Type:                        redactString(string(credential.Type)),
 		Status:                      redactString(string(credential.Status)),
-		Current:                     target(credential.Priority, credential.Disabled),
-		Target:                      target(item.Priority, item.Disabled),
+		Current:                     target(credential.Priority, credential.Weight, credential.Disabled),
+		Target:                      target(item.Priority, item.Weight, item.Disabled),
 		EvidenceFresh:               item.EvidenceFresh,
 		Reason:                      redactString(item.Reason),
 		PlanType:                    string(item.PlanType),
@@ -153,8 +154,8 @@ func snapshotChange(change priority.Change) SnapshotChange {
 	return SnapshotChange{
 		Name:          redactString(credential.Name),
 		AuthIndex:     redactString(credential.AuthIndex),
-		Current:       target(credential.Priority, credential.Disabled),
-		Target:        target(change.Priority, change.Disabled),
+		Current:       target(credential.Priority, credential.Weight, credential.Disabled),
+		Target:        target(change.Priority, change.Weight, change.Disabled),
 		EvidenceFresh: change.EvidenceFresh,
 		Reason:        redactString(change.Reason),
 	}
@@ -169,8 +170,8 @@ func resultName(credential core.Credential) string {
 	return ""
 }
 
-func target(priority int, disabled bool) Target {
-	return Target{Priority: priority, Disabled: disabled}
+func target(priority int, weight int, disabled bool) Target {
+	return Target{Priority: priority, Weight: weight, Disabled: disabled}
 }
 
 func redactString(value string) string {

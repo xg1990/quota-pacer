@@ -500,7 +500,7 @@ func credentialsFromAuthFiles(files []host.AuthFile) ([]core.Credential, map[str
 	credentials := make([]core.Credential, len(files))
 	accountIDs := make(map[string]string, len(files))
 	for index, file := range files {
-		credentials[index] = core.Credential{Name: file.Name, AuthIndex: file.AuthIndex, Provider: core.Provider(file.Provider), Type: core.CredentialType(file.Type), Status: core.CredentialStatus(file.Status), Disabled: file.Disabled, Unavailable: file.Unavailable, Priority: file.Priority, PriorityMissing: file.PriorityMissing, Account: file.Account, Email: file.Email, PlanType: core.PlanType(file.IDToken.PlanType), RawJSON: append([]byte(nil), file.RawJSON...)}
+		credentials[index] = core.Credential{Name: file.Name, AuthIndex: file.AuthIndex, Provider: core.Provider(file.Provider), Type: core.CredentialType(file.Type), Status: core.CredentialStatus(file.Status), Disabled: file.Disabled, Unavailable: file.Unavailable, Priority: file.Priority, PriorityMissing: file.PriorityMissing, Weight: file.Weight, WeightMissing: file.WeightMissing, Account: file.Account, Email: file.Email, PlanType: core.PlanType(file.IDToken.PlanType), RawJSON: append([]byte(nil), file.RawJSON...)}
 		accountIDs[file.AuthIndex] = file.IDToken.ChatGPTAccountID
 	}
 	return credentials, accountIDs
