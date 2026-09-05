@@ -83,8 +83,21 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	if item1.Priority != 100 {
 		t.Errorf("expected item1 priority 100, got %d", item1.Priority)
 	}
-	if item2.Priority != 99 {
-		t.Errorf("expected item2 priority 99, got %d", item2.Priority)
+	if item2.Priority != 100 {
+		t.Errorf("expected item2 priority 100 (shared fresh-positive tier), got %d", item2.Priority)
+	}
+	maxScore := item1.PacingScore
+	if item2.PacingScore > maxScore {
+		maxScore = item2.PacingScore
+	}
+	if want := weightFromPacingScore(item1.PacingScore, maxScore); item1.Weight != want {
+		t.Errorf("expected item1 weight %d, got %d", want, item1.Weight)
+	}
+	if want := weightFromPacingScore(item2.PacingScore, maxScore); item2.Weight != want {
+		t.Errorf("expected item2 weight %d, got %d", want, item2.Weight)
+	}
+	if item1.Weight <= item2.Weight {
+		t.Errorf("expected higher-remaining item1 weight > item2 weight, got item1=%d item2=%d", item1.Weight, item2.Weight)
 	}
 	if item1.Disabled || item2.Disabled {
 		t.Errorf("expected active credentials not disabled")
@@ -212,16 +225,24 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 		t.Fatalf("expected 3 plan items, got %d", len(plan.Items))
 	}
 
-	// 全局唯一优先级：跨 Provider 分配 100, 99, 98
-	priorities := make(map[int]bool)
+	// 共享健康 tier：跨 Provider 相同证据 -> 相同 priority(100) + 相同 weight
+	maxScore := 0.0
 	for _, item := range plan.Items {
-		if item.Priority < 98 || item.Priority > 100 {
-			t.Errorf("expected priority in [98, 100] for %s, got %d", item.Credential.Name, item.Priority)
+		if item.PacingScore > maxScore {
+			maxScore = item.PacingScore
 		}
-		if priorities[item.Priority] {
-			t.Errorf("duplicate priority %d found", item.Priority)
+	}
+	for _, item := range plan.Items {
+		if item.Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		priorities[item.Priority] = true
+		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
+		}
+	}
+	if plan.Items[0].Weight != plan.Items[1].Weight || plan.Items[1].Weight != plan.Items[2].Weight {
+		t.Errorf("expected identical evidence across providers to produce equal weights, got %d/%d/%d",
+			plan.Items[0].Weight, plan.Items[1].Weight, plan.Items[2].Weight)
 	}
 }
 
@@ -299,19 +320,33 @@ func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
 	}
 
 	priorityByAuth := make(map[string]int)
+	weightByAuth := make(map[string]int)
+	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+		weightByAuth[item.Credential.AuthIndex] = item.Weight
+		if item.PacingScore > maxScore {
+			maxScore = item.PacingScore
+		}
 	}
 
-	// 预期排序：Claude (score 1.99) -> 100, Codex (score 1.12) -> 99, Antigravity (score 0.78) -> 98
-	if p := priorityByAuth["auth-claude-urgent"]; p != 100 {
-		t.Errorf("expected claude priority 100, got %d", p)
+	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按 pacing score 区分流量占比。
+	for _, item := range plan.Items {
+		if item.Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
+		}
+		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
+		}
 	}
-	if p := priorityByAuth["auth-codex-mid"]; p != 99 {
-		t.Errorf("expected codex priority 99, got %d", p)
+	// 预期 weight 排序：Claude (score 1.99) > Codex (score 1.12) > Antigravity (score 0.78)
+	if weightByAuth["auth-claude-urgent"] <= weightByAuth["auth-codex-mid"] {
+		t.Errorf("expected claude weight > codex weight, got claude=%d codex=%d",
+			weightByAuth["auth-claude-urgent"], weightByAuth["auth-codex-mid"])
 	}
-	if p := priorityByAuth["auth-ag-slow"]; p != 98 {
-		t.Errorf("expected antigravity priority 98, got %d", p)
+	if weightByAuth["auth-codex-mid"] <= weightByAuth["auth-ag-slow"] {
+		t.Errorf("expected codex weight > antigravity weight, got codex=%d antigravity=%d",
+			weightByAuth["auth-codex-mid"], weightByAuth["auth-ag-slow"])
 	}
 }
 
@@ -386,19 +421,31 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 	}
 
 	priorityByAuth := make(map[string]int)
+	weightByAuth := make(map[string]int)
+	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+		weightByAuth[item.Credential.AuthIndex] = item.Weight
+		if item.PacingScore > maxScore {
+			maxScore = item.PacingScore
+		}
 	}
 
-	// 预期排序：auth-slow (score 2.80) = 100, auth-mid (score 1.40) = 99, auth-fast (score 0.35) = 98
-	if p := priorityByAuth["auth-slow"]; p != 100 {
-		t.Errorf("expected auth-slow priority 100, got %d", p)
+	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按 pacing score 区分流量占比。
+	for _, item := range plan.Items {
+		if item.Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
+		}
+		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
+		}
 	}
-	if p := priorityByAuth["auth-mid"]; p != 99 {
-		t.Errorf("expected auth-mid priority 99, got %d", p)
+	// 预期 weight 排序：auth-slow (score 2.80) > auth-mid (score 1.40) > auth-fast (score 0.35)
+	if weightByAuth["auth-slow"] <= weightByAuth["auth-mid"] {
+		t.Errorf("expected auth-slow weight > auth-mid weight, got slow=%d mid=%d", weightByAuth["auth-slow"], weightByAuth["auth-mid"])
 	}
-	if p := priorityByAuth["auth-fast"]; p != 98 {
-		t.Errorf("expected auth-fast priority 98, got %d", p)
+	if weightByAuth["auth-mid"] <= weightByAuth["auth-fast"] {
+		t.Errorf("expected auth-mid weight > auth-fast weight, got mid=%d fast=%d", weightByAuth["auth-mid"], weightByAuth["auth-fast"])
 	}
 }
 
@@ -502,16 +549,29 @@ func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
 	}
 
 	priorityByAuth := make(map[string]int)
+	weightByAuth := make(map[string]int)
+	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+		weightByAuth[item.Credential.AuthIndex] = item.Weight
+		if item.PacingScore > maxScore {
+			maxScore = item.PacingScore
+		}
 	}
 
-	// 满额账号必须排在第一位，避免"周期未激活"的账号长期闲置。
-	if p := priorityByAuth["auth-full"]; p != 100 {
-		t.Errorf("expected auth-full priority 100, got %d", p)
+	// 共享健康 tier：满额账号（score 走 remaining>=100 特判分支，远高于 urgent）
+	// 与即将过期账号 priority 都是 100，只靠 weight 体现悬殊差距。
+	for _, item := range plan.Items {
+		if item.Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
+		}
+		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
+		}
 	}
-	if p := priorityByAuth["auth-urgent"]; p != 99 {
-		t.Errorf("expected auth-urgent priority 99, got %d", p)
+	if weightByAuth["auth-full"] <= weightByAuth["auth-urgent"] {
+		t.Errorf("expected auth-full weight > auth-urgent weight, got full=%d urgent=%d",
+			weightByAuth["auth-full"], weightByAuth["auth-urgent"])
 	}
 }
 
@@ -568,17 +628,30 @@ func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
 	}
 
 	priorityByAuth := make(map[string]int)
+	weightByAuth := make(map[string]int)
+	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
+		weightByAuth[item.Credential.AuthIndex] = item.Weight
+		if item.PacingScore > maxScore {
+			maxScore = item.PacingScore
+		}
 	}
 
 	// 移除 paid-first 规则后，纯按 PacingScore 排序：
-	// auth-ag-free (score = 1.000 / 1.000 = 1.0) 应排在 auth-codex-plus (score = 0.33 / (139/168) ≈ 0.399) 前面
-	if p := priorityByAuth["auth-ag-free"]; p != 100 {
-		t.Errorf("expected antigravity-free priority 100, got %d", p)
+	// auth-ag-free (score = 1.000 / 1.000 = 1.0) 应比 auth-codex-plus (score = 0.33 / (139/168) ≈ 0.399) 权重更高，
+	// 但共享同一个 priority tier（100），不再靠 priority 差异体现。
+	for _, item := range plan.Items {
+		if item.Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
+		}
+		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
+		}
 	}
-	if p := priorityByAuth["auth-codex-plus"]; p != 99 {
-		t.Errorf("expected codex-plus priority 99, got %d", p)
+	if weightByAuth["auth-ag-free"] <= weightByAuth["auth-codex-plus"] {
+		t.Errorf("expected antigravity-free weight > codex-plus weight, got free=%d plus=%d",
+			weightByAuth["auth-ag-free"], weightByAuth["auth-codex-plus"])
 	}
 }
 
@@ -917,6 +990,10 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 	if plan.Changes[0].Priority != 100 {
 		t.Errorf("expected fresh item assigned top priority 100, got %d", plan.Changes[0].Priority)
 	}
+	// 单一 tier 成员：score 即 maxScore，weight 应为满值。
+	if plan.Changes[0].Weight != weightScaleReference {
+		t.Errorf("expected sole tier member weight %d, got %d", weightScaleReference, plan.Changes[0].Weight)
+	}
 
 	// Cached item retains priority 50
 	var cachedItem *PlanItem
@@ -1118,5 +1195,137 @@ func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T
 	want := (0.30 / (84.0 / 168.0)) * 2
 	if diff := item.PacingScore - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted PacingScore %.6f, got %.6f", want, item.PacingScore)
+	}
+}
+
+// --- weightFromPacingScore ---
+
+func TestWeightFromPacingScore_EqualToMaxGetsFullWeight(t *testing.T) {
+	if got := weightFromPacingScore(1.5, 1.5); got != weightScaleReference {
+		t.Errorf("expected weight %d when score==maxScore, got %d", weightScaleReference, got)
+	}
+}
+
+func TestWeightFromPacingScore_ProportionalMidpoint(t *testing.T) {
+	if got := weightFromPacingScore(500, 1000); got != 500 {
+		t.Errorf("expected weight 500 for half-of-max score, got %d", got)
+	}
+}
+
+func TestWeightFromPacingScore_FlooredAtOneForNearZeroRatio(t *testing.T) {
+	if got := weightFromPacingScore(0.0001, 1000); got != weightFloor {
+		t.Errorf("expected weight floored at %d for near-zero ratio, got %d", weightFloor, got)
+	}
+}
+
+func TestWeightFromPacingScore_DegenerateMaxScoreZero(t *testing.T) {
+	if got := weightFromPacingScore(0, 0); got != weightFloor {
+		t.Errorf("expected weight %d when maxScore<=epsilon, got %d", weightFloor, got)
+	}
+}
+
+// --- ensureUniquePriorities：区分"设计内共享 tier priority"与"真正意外冲突" ---
+
+func TestEnsureUniquePriorities_PreservesSharedTierPriority(t *testing.T) {
+	remA := int64(50)
+	remB := int64(30)
+	items := []PlanItem{
+		{
+			Credential:    core.Credential{AuthIndex: "auth-a"},
+			Priority:      100,
+			EvidenceFresh: true,
+			Remaining:     &remA,
+			Reason:        "fresh remaining positive",
+		},
+		{
+			Credential:    core.Credential{AuthIndex: "auth-b"},
+			Priority:      100,
+			EvidenceFresh: true,
+			Remaining:     &remB,
+			Reason:        "fresh remaining positive",
+		},
+	}
+	options := Options{Now: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), MaxPriority: 100}
+
+	ensureUniquePriorities(items, options)
+
+	if items[0].Priority != 100 || items[1].Priority != 100 {
+		t.Errorf("expected both fresh-positive tier members to keep shared priority 100, got %d and %d",
+			items[0].Priority, items[1].Priority)
+	}
+	if items[0].ForceWrite || items[1].ForceWrite {
+		t.Errorf("expected tier members untouched by uniqueness pass (no ForceWrite)")
+	}
+	if items[0].Reason != "fresh remaining positive" || items[1].Reason != "fresh remaining positive" {
+		t.Errorf("expected tier members' Reason left unchanged, got %q and %q", items[0].Reason, items[1].Reason)
+	}
+}
+
+func TestEnsureUniquePriorities_BumpsStaleItemCollidingWithTierSlot(t *testing.T) {
+	remTier := int64(50)
+	items := []PlanItem{
+		{
+			Credential:    core.Credential{AuthIndex: "auth-tier"},
+			Priority:      100,
+			EvidenceFresh: true,
+			Remaining:     &remTier,
+			Reason:        "fresh remaining positive",
+		},
+		{
+			// 陈旧遗留凭证：本轮无 fresh 证据，但仍占用着与 tier 相同的 priority 槽位。
+			Credential: core.Credential{AuthIndex: "auth-stale", Priority: 100},
+			Priority:   100,
+		},
+	}
+	options := Options{Now: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), MaxPriority: 100}
+
+	ensureUniquePriorities(items, options)
+
+	if items[0].Priority != 100 {
+		t.Errorf("expected tier member to keep priority 100, got %d", items[0].Priority)
+	}
+	if items[1].Priority == 100 {
+		t.Errorf("expected stale item colliding with tier slot to be bumped off priority 100, still at %d", items[1].Priority)
+	}
+	if !items[1].ForceWrite {
+		t.Errorf("expected stale item bump to set ForceWrite=true so it gets written back to host")
+	}
+	if items[1].Reason != "priority uniqueness" {
+		t.Errorf("expected stale item Reason 'priority uniqueness', got %q", items[1].Reason)
+	}
+}
+
+func TestEnsureUniquePriorities_StillCorrectsGenuineNonTierCollision(t *testing.T) {
+	remTier := int64(50)
+	items := []PlanItem{
+		{
+			Credential:    core.Credential{AuthIndex: "auth-tier"},
+			Priority:      100,
+			EvidenceFresh: true,
+			Remaining:     &remTier,
+			Reason:        "fresh remaining positive",
+		},
+		{
+			Credential: core.Credential{AuthIndex: "auth-p", Priority: 50},
+			Priority:   50,
+		},
+		{
+			Credential: core.Credential{AuthIndex: "auth-q", Priority: 50},
+			Priority:   50,
+		},
+	}
+	options := Options{Now: time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC), MaxPriority: 100}
+
+	ensureUniquePriorities(items, options)
+
+	if items[0].Priority != 100 {
+		t.Errorf("expected tier member unaffected by non-tier collision fix, got %d", items[0].Priority)
+	}
+	if items[1].Priority == items[2].Priority {
+		t.Errorf("expected genuine collision between non-tier stale items to be resolved, both still at %d", items[1].Priority)
+	}
+	if items[1].Priority >= 100 || items[2].Priority >= 100 {
+		t.Errorf("expected reassigned non-tier priorities to stay below the reserved tier slot 100, got %d and %d",
+			items[1].Priority, items[2].Priority)
 	}
 }

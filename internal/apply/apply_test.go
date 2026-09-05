@@ -10,11 +10,17 @@ import (
 
 type mockHost struct {
 	patchedPriority map[string]int
+	patchedWeight   map[string]int
 	patchedDisabled map[string]bool
 }
 
 func (m *mockHost) PatchPriority(ctx context.Context, authIndex string, p int) error {
 	m.patchedPriority[authIndex] = p
+	return nil
+}
+
+func (m *mockHost) PatchWeight(ctx context.Context, authIndex string, weight int) error {
+	m.patchedWeight[authIndex] = weight
 	return nil
 }
 
@@ -36,6 +42,7 @@ func (mockAuditor) RecordEvent(ctx context.Context, event AuditEvent) error {
 func TestApply_Success(t *testing.T) {
 	h := &mockHost{
 		patchedPriority: map[string]int{},
+		patchedWeight:   map[string]int{},
 		patchedDisabled: map[string]bool{},
 	}
 	aud := mockAuditor{}

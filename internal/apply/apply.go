@@ -29,6 +29,7 @@ var ErrMissingHost = errors.New("apply: host is required")
 // Host 是 apply writer 需要的最小宿主写入接口。
 type Host interface {
 	PatchPriority(ctx context.Context, authIndex string, priority int) error
+	PatchWeight(ctx context.Context, authIndex string, weight int) error
 	PatchDisabled(ctx context.Context, name string, disabled bool) error
 }
 
@@ -70,10 +71,12 @@ type ChangeResult struct {
 	EvidenceFresh     bool         `json:"evidence_fresh"`
 	Reason            string       `json:"reason"`
 	PriorityAttempted bool         `json:"priority_attempted"`
+	WeightAttempted   bool         `json:"weight_attempted"`
 	DisabledAttempted bool         `json:"disabled_attempted"`
 	PriorityFrom      int          `json:"priority_from"`
 	PriorityMissing   bool         `json:"priority_missing,omitempty"`
 	PriorityTo        int          `json:"priority_to"`
+	WeightTo          int          `json:"weight_to,omitempty"`
 	DisabledFrom      bool         `json:"disabled_from"`
 	DisabledTo        bool         `json:"disabled_to"`
 	Error             string       `json:"error,omitempty"`
@@ -84,6 +87,7 @@ func FailureResult(credential priority.PlanItem, err error) ChangeResult {
 	result := newChangeResult(priority.Change{
 		Credential:    credential.Credential,
 		Priority:      credential.Priority,
+		Weight:        credential.Weight,
 		Disabled:      credential.Disabled,
 		EvidenceFresh: credential.EvidenceFresh,
 		Reason:        credential.Reason,
@@ -133,6 +137,7 @@ func skippedPlanItemResult(item priority.PlanItem) ChangeResult {
 	result := newChangeResult(priority.Change{
 		Credential:    item.Credential,
 		Priority:      item.Priority,
+		Weight:        item.Weight,
 		Disabled:      item.Disabled,
 		EvidenceFresh: item.EvidenceFresh,
 		Reason:        item.Reason,
@@ -149,7 +154,12 @@ func applyChange(ctx context.Context, writer Host, change priority.Change) Chang
 	}
 	priorityChanged := change.Priority != change.Credential.Priority || change.Credential.PriorityMissing
 	disabledChanged := change.Disabled != change.Credential.Disabled
-	if !priorityChanged && !disabledChanged {
+	// CPA host.auth.list 当前不回传 weight 字段，无法读回当前值做等值比较；
+	// change.Weight>0 只在 planFreshPositive 的共享健康 tier 成员上出现，
+	// 这些成员的 Weight 需要每轮都刷新写回（详见 shouldChange 对
+	// "fresh remaining positive" 的特判）。
+	weightAttempted := change.Weight > 0
+	if !priorityChanged && !disabledChanged && !weightAttempted {
 		result.Status = ChangeStatusSkipped
 		return result
 	}
@@ -163,6 +173,14 @@ func applyChange(ctx context.Context, writer Host, change priority.Change) Chang
 		if err := writer.PatchPriority(ctx, change.Credential.AuthIndex, change.Priority); err != nil {
 			result.Status = ChangeStatusFailed
 			result.Error = redactedError(fmt.Errorf("patch priority: %w", err))
+			return result
+		}
+	}
+	result.WeightAttempted = weightAttempted
+	if weightAttempted {
+		if err := writer.PatchWeight(ctx, change.Credential.AuthIndex, change.Weight); err != nil {
+			result.Status = ChangeStatusFailed
+			result.Error = redactedError(fmt.Errorf("patch weight: %w", err))
 			return result
 		}
 	}
@@ -196,6 +214,7 @@ func newChangeResult(change priority.Change) ChangeResult {
 		PriorityFrom:    change.Credential.Priority,
 		PriorityMissing: change.Credential.PriorityMissing,
 		PriorityTo:      change.Priority,
+		WeightTo:        change.Weight,
 		DisabledFrom:    change.Credential.Disabled,
 		DisabledTo:      change.Disabled,
 	}
