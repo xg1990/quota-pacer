@@ -564,27 +564,17 @@ func codexResetCreditBoostActive(item PlanItem, now time.Time) bool {
 	return untilExpiry > 0 && untilExpiry <= codexResetCreditExpiryWindow
 }
 
-// boostRemaining 在命中提升条件时把窗口剩余百分比直接置满（100%），而不是在现有 remaining
-// 基础上叠加或倍增：未来 14 天内存在一条即将过期的银行化重置额度，意味着这个窗口应当被视为
-// 满额可用——哪怕真实剩余量很低甚至已经耗尽，也应该积极消耗以触发限流从而兑换掉这条即将作废
-// 的额度，而不是对现有剩余量做加成式提升。
-func boostRemaining(remaining int64, boost bool) int64 {
-	if !boost {
-		return remaining
-	}
-	return 100
-}
-
 // pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
 // 遍历凭据的所有有效额度窗口（Windows），取最紧张（Pacing 分数最低，即瓶颈窗口）的那个；
 // 若无多窗口结构，则尝试短窗/长窗 legacy 字段，最终回退到单窗口启发式。
-// Codex 凭证若命中"即将过期的银行化重置额度"提升条件（见 codexResetCreditBoostActive），
-// 会在计算各窗口分数前把 Remaining 直接置满（视为满额可用），鼓励更激进地消耗以避免额度浪费。
+// 注意：这条排序链路不再应用 Codex "即将过期银行化重置额度" 提升（见
+// codexResetCreditBoostActive）——该提升只作用于驱动 weight 的 remainingHeadroom，因为
+// pacingScore 已经不再驱动 priority/tier 归属，只用于陈旧凭证的 tie-break 与审计展示，
+// 双轨维护同一个提升语义没有意义。
 func pacingScore(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
-		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响，也不受提升逻辑影响
+		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响
 	}
-	boost := codexResetCreditBoostActive(item, now)
 
 	if len(item.Windows) > 0 {
 		scores := make([]float64, 0, len(item.Windows))
@@ -592,7 +582,7 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 			if w.Duration <= 0 || w.ResetAt.IsZero() {
 				continue
 			}
-			scores = append(scores, windowPacingScore(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
+			scores = append(scores, windowPacingScore(w.Remaining, w.ResetAt, w.Duration, now))
 		}
 		if len(scores) > 0 {
 			return slices.Min(scores)
@@ -601,21 +591,21 @@ func pacingScore(item PlanItem, now time.Time) float64 {
 
 	scores := make([]float64, 0, 2)
 	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
+		scores = append(scores, windowPacingScore(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
 	}
 	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
+		scores = append(scores, windowPacingScore(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
 	}
 	if len(scores) > 0 {
 		return slices.Min(scores)
 	}
 
-	return legacyPacingScore(item, now, boost)
+	return legacyPacingScore(item, now)
 }
 
 // legacyPacingScore 是新字段未提供时（xAI 等）的单窗口启发式回退路径。
-func legacyPacingScore(item PlanItem, now time.Time, boost bool) float64 {
-	remaining := boostRemaining(*item.Remaining, boost)
+func legacyPacingScore(item PlanItem, now time.Time) float64 {
+	remaining := *item.Remaining
 	remainingRatio := float64(remaining) / 100.0
 
 	// 满额（Remaining=100%）账号优先处理：部分账号在额度周期 reset 后不会立即激活，
@@ -712,20 +702,37 @@ func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.D
 // remainingHeadroom 是 windowRemainingHeadroom 的多窗口/多字段入口，窗口来源级联与瓶颈窗口
 // 选取（多窗口时取 headroom 最小的那个）完全复用 pacingScore 的结构：Windows 列表 ->
 // ShortWindowRemaining/LongWindowRemaining 短长窗口对 -> legacy 单窗口回退
-// （legacyRemainingHeadroom）。同样对 Codex "即将过期银行化重置额度" 应用 boostRemaining。
+// （legacyRemainingHeadroom）。
+//
+// Codex "即将过期银行化重置额度" 提升（见 codexResetCreditBoostActive）只作用于这条驱动
+// weight 的链路：在按正常规则算出瓶颈 headroom 之后，命中条件时直接 +1.0，不做任何上限
+// clamp。之所以不是把 headroom 封顶在 1.0（满额）：如果只封顶到 1.0，这个即将浪费的账号会
+// 和一个普通满额账号（headroom 同样是 1.0）算出完全一样的 weight，起不到"应该被优先消耗掉"
+// 的效果；不封顶让它的 headroom 能明显超过 1.0（比如 0.5+1.0=1.5），对应 weight 明显超过
+// 1000 这个正常上限，CPA 的 WeightedRoundRobinSelector 才会真的把更大比例的流量倾斜过去，
+// 加速消耗这笔即将作废的额度，这才是提升机制的本意。即使正常算出的 headroom 已经 floor 到
+// 0（已经落后于配速），+1.0 后仍能拿到 1.0，不会因为这类账号"原本就差"而在提升上吃亏。
 func remainingHeadroom(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
 		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier，这里仅保持与 pacingScore 对称
 	}
-	boost := codexResetCreditBoostActive(item, now)
+	headroom := unboostedRemainingHeadroom(item, now)
+	if codexResetCreditBoostActive(item, now) {
+		headroom += 1.0
+	}
+	return headroom
+}
 
+// unboostedRemainingHeadroom 按正常规则（不含任何提升）计算瓶颈窗口的 headroom，供
+// remainingHeadroom 在此基础上叠加 Codex reset-credit 提升。
+func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	if len(item.Windows) > 0 {
 		headrooms := make([]float64, 0, len(item.Windows))
 		for _, w := range item.Windows {
 			if w.Duration <= 0 || w.ResetAt.IsZero() {
 				continue
 			}
-			headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
+			headrooms = append(headrooms, windowRemainingHeadroom(w.Remaining, w.ResetAt, w.Duration, now))
 		}
 		if len(headrooms) > 0 {
 			return slices.Min(headrooms)
@@ -734,22 +741,23 @@ func remainingHeadroom(item PlanItem, now time.Time) float64 {
 
 	headrooms := make([]float64, 0, 2)
 	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
+		headrooms = append(headrooms, windowRemainingHeadroom(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
 	}
 	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
+		headrooms = append(headrooms, windowRemainingHeadroom(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
 	}
 	if len(headrooms) > 0 {
 		return slices.Min(headrooms)
 	}
 
-	return legacyRemainingHeadroom(item, now, boost)
+	return legacyRemainingHeadroom(item, now)
 }
 
 // legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径，窗口/周期总长的
-// 确定逻辑与 legacyPacingScore 完全一致，只是最终分数从"除法"换成"减法"。
-func legacyRemainingHeadroom(item PlanItem, now time.Time, boost bool) float64 {
-	remaining := boostRemaining(*item.Remaining, boost)
+// 确定逻辑与 legacyPacingScore 完全一致，只是最终分数从"除法"换成"减法"。不含提升逻辑——由
+// remainingHeadroom 统一在最终结果上叠加。
+func legacyRemainingHeadroom(item PlanItem, now time.Time) float64 {
+	remaining := *item.Remaining
 	if remaining >= 100 {
 		return 1.0
 	}
