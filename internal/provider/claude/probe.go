@@ -242,17 +242,55 @@ func probeCandidateURLs(baseURL string, orgUUID string) []string {
 	return urls
 }
 
+// claudeProbeBetaOAuth and claudeProbeBetaAPIKey mirror the exact
+// Anthropic-Beta value CLIProxyAPI's own Claude executor computes for a
+// 1-token probe request (max_tokens=1, single user message, no tools, no
+// thinking) — derived from claudeCodeCLIBetas in CLIProxyAPI v7.2.151's
+// internal/runtime/executor/claude_executor_request.go, for the OAuth and
+// API-key branches respectively (isClaudeProbeOrHelperRequest is true for
+// this exact body shape, which drops server-side-fallback,
+// thinking-display-updates, and extended-cache-ttl from the base list; a
+// non-legacy model like claude-haiku-4-5-20251001 still adds
+// mid-conversation-system).
+//
+// Kept as literal constants (not derived at runtime) since quota-pacer is a
+// separate process/binary and cannot import CLIProxyAPI's internal
+// packages. Anthropic and CLIProxyAPI both revise these beta identifiers
+// periodically (see CPA's df7e04ea/086ad91b/4a5ab534 fingerprint-chain
+// commits) — re-verify against CLIProxyAPI's current source whenever this
+// drifts again.
+const (
+	claudeProbeBetaOAuth  = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,fallback-credit-2026-06-01"
+	claudeProbeBetaAPIKey = "claude-code-20250219,interleaved-thinking-2025-05-14,redact-thinking-2026-02-12,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07"
+)
+
 func probeHeaders(request ProbeRequest) host.Header {
 	token := "$TOKEN$"
 	if accessToken := strings.TrimSpace(request.AccessToken); accessToken != "" {
 		token = accessToken
 	}
+	oauthToken := strings.Contains(token, "sk-ant-oat")
+	anthropicBeta := claudeProbeBetaAPIKey
+	if oauthToken {
+		anthropicBeta = claudeProbeBetaOAuth
+	}
 	headers := host.Header{
 		"Accept":            []string{"application/json"},
 		"Content-Type":      []string{"application/json"},
-		"User-Agent":        []string{"claude-code/0.2.29 (darwin; arm64)"},
+		"User-Agent":        []string{"claude-cli/2.1.258 (external, cli)"},
 		"Anthropic-Version": []string{"2023-06-01"},
 		"Authorization":     []string{"Bearer " + token},
+		"Anthropic-Beta":    []string{anthropicBeta},
+		// The identity headers below match real Claude Code 2.1.258 /
+		// @anthropic-ai/sdk 0.112.1 traffic (see CPA's claude_executor_request.go
+		// identityHeader() defaults), so this probe reads as a genuine CLI
+		// helper/preflight request rather than a bespoke, unrecognized client.
+		"Anthropic-Dangerous-Direct-Browser-Access": []string{"true"},
+		"X-App":                   []string{"cli"},
+		"X-Stainless-Retry-Count": []string{"0"},
+		"X-Stainless-Runtime":     []string{"node"},
+		"X-Stainless-Lang":        []string{"js"},
+		"X-Stainless-Timeout":     []string{"600"},
 	}
 	if strings.HasPrefix(token, "sk-ant-api") {
 		headers["X-Api-Key"] = []string{token}
