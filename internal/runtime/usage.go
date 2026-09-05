@@ -15,27 +15,36 @@ import (
 // usageRecord is the boundary parse of host usage.handle UsageRecord.
 // Field names accept snake_case / camelCase / host variants; unknown fields ignored.
 type usageRecord struct {
-	AuthIndex  string
-	Provider   string
-	Model      string
+	AuthIndex string
+	Provider  string
+	Model     string
+	// Failed/StatusCode/Error/RawBody mirror pluginapi.UsageRecord.Failed and
+	// its nested Failure{StatusCode,Body} (see parseUsageRecord for the exact
+	// real-schema mapping — StatusCode/Error/RawBody are only populated when
+	// Failed is true).
+	Failed     bool
 	StatusCode int
 	Success    *bool
 	Error      string
 	ErrorCode  string
 	RawBody    string
+	// ResponseHeaders 是 pluginapi.UsageRecord.ResponseHeaders 的解析结果——真实
+	// 上游响应头（Claude/Codex 被动配额信号来源，见 usage_quota.go）。
+	ResponseHeaders map[string][]string
 }
 
-// HandleUsage handles usage.handle: business-side signal updates xAI store evidence.
-// Non-xAI or unparseable payloads succeed silently to avoid host retry storms.
+// HandleUsage handles usage.handle: business-side signal updates cached quota
+// evidence from real traffic. xAI keeps its existing success/failure policy
+// tracking; Claude/Codex additionally extract passive quota signals from
+// ResponseHeaders (see applyPassiveUsageEvidence in usage_quota.go).
+// Non-xAI/Claude/Codex or unparseable payloads succeed silently to avoid host
+// retry storms.
 func (r *Runtime) HandleUsage(ctx context.Context, raw []byte) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("usage handle context: %w", err)
 	}
 	rec, ok := parseUsageRecord(raw)
 	if !ok {
-		return nil
-	}
-	if !isXAIUsageProvider(rec.Provider) {
 		return nil
 	}
 	authIndex := strings.TrimSpace(rec.AuthIndex)
@@ -55,7 +64,13 @@ func (r *Runtime) HandleUsage(ctx context.Context, raw []byte) error {
 	if err != nil {
 		return fmt.Errorf("usage load store: %w", err)
 	}
-	applied, err := applyXAIUsageToStore(ctx, store, rec, now)
+
+	var applied bool
+	if isXAIUsageProvider(rec.Provider) {
+		applied, err = applyXAIUsageToStore(ctx, store, rec, now)
+	} else {
+		applied, err = applyPassiveUsageEvidence(ctx, store, rec, now)
+	}
 	if err != nil {
 		return err
 	}

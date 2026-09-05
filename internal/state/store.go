@@ -30,6 +30,10 @@ type Source string
 const (
 	// SourceFreshProbe 表示条目来自 fresh probe 结果。
 	SourceFreshProbe Source = "fresh_probe"
+	// SourcePassiveUsage 表示条目来自被动观测真实流量响应（usage.handle），
+	// 而非主动探测请求；仅用于诊断/审计展示来源，不参与排序/节流优先级判断——
+	// 两种来源统一按"最新观测时间胜出"的规则写入同一份缓存条目。
+	SourcePassiveUsage Source = "passive_usage"
 )
 
 // Entry 是 refresh-cache.json 内单个 auth_index 的状态条目。
