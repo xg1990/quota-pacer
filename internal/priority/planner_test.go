@@ -1001,8 +1001,9 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 // --- Codex banked reset-credit "即将过期" pacing boost ---
 // 用户需求：Codex 若存在一条 available 状态的银行化重置额度（可手动兑换的一次性重置），
 // 且其 expiresAt 落在未来 14 天内（即将作废），应更激进地消耗额度而非保守 pacing，
-// 避免额度白白过期浪费。实现为对 Remaining 做相对倍增（而非绝对 +100 百分点），
-// 详见 planner.go 中 codexResetCreditBoostActive/boostRemaining 的注释说明。
+// 避免额度白白过期浪费。实现为把 Remaining 直接置满（视为满额可用），而不是在现有
+// 剩余量基础上叠加或倍增，详见 planner.go 中 codexResetCreditBoostActive/boostRemaining
+// 的注释说明。
 
 func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.Duration) PlanItem {
 	rem := remaining
@@ -1016,16 +1017,16 @@ func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.D
 func TestPacingScore_CodexResetCreditBoost_ExpiringWithin14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := pacingScore(item, now)
 
 	expiresAt := now.Add(5 * 24 * time.Hour) // 5 天后过期，落在 14 天窗口内
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
+	// 置满后 remaining=100 直接触发 legacyPacingScore 的满额天花板分支：1.0/0.001 = 1000。
 	boosted := pacingScore(item, now)
-	want := baseline * 2
+	want := 1000.0
 	if diff := boosted - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected boosted score %.6f (2x baseline %.6f), got %.6f", want, baseline, boosted)
+		t.Errorf("expected boosted score %.6f (remaining set to full), got %.6f", want, boosted)
 	}
 }
 
@@ -1110,14 +1111,14 @@ func TestPacingScore_CodexResetCreditBoost_AlreadyExpiredCreditNotBoosted(t *tes
 func TestPacingScore_CodexResetCreditBoost_BoundaryExactly14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := pacingScore(item, now)
 
 	expiresAt := now.Add(14 * 24 * time.Hour) // 精确 14 天：应触发提升
+
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
 	got := pacingScore(item, now)
-	want := baseline * 2
+	want := 1000.0 // remaining 置满触发满额天花板分支
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted score %.6f at exactly-14-day boundary, got %.6f", want, got)
 	}
@@ -1177,9 +1178,38 @@ func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T
 	if item.NearestResetCreditExpiresAt == nil || !item.NearestResetCreditExpiresAt.Equal(expiresAt) {
 		t.Errorf("expected NearestResetCreditExpiresAt threaded through, got %v", item.NearestResetCreditExpiresAt)
 	}
-	want := (0.30 / (84.0 / 168.0)) * 2
+	want := 1000.0 // remaining 置满触发满额天花板分支
 	if diff := item.PacingScore - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted PacingScore %.6f, got %.6f", want, item.PacingScore)
+	}
+}
+
+// --- boostRemaining：直接置满而非倍增/叠加 ---
+
+func TestBoostRemaining_SetsToFullWhenActive(t *testing.T) {
+	if got := boostRemaining(30, true); got != 100 {
+		t.Errorf("expected boostRemaining(30, true) == 100 (置满，不是 30*2=60), got %d", got)
+	}
+}
+
+func TestBoostRemaining_NoOpWhenInactive(t *testing.T) {
+	if got := boostRemaining(30, false); got != 30 {
+		t.Errorf("expected boostRemaining(30, false) == 30 (unchanged), got %d", got)
+	}
+}
+
+func TestBoostRemaining_AlreadyFullStaysFullWhenActive(t *testing.T) {
+	if got := boostRemaining(100, true); got != 100 {
+		t.Errorf("expected boostRemaining(100, true) == 100, got %d", got)
+	}
+}
+
+func TestBoostRemaining_ZeroBecomesFullWhenActive(t *testing.T) {
+	// 单个窗口本身剩余 0 但命中 boost 条件时，该窗口也应被置满——"直接加满"语义不以
+	// 现有剩余量为基准做任何形式的相对调整。（顶层 item.Remaining<=0 的短路仍由
+	// pacingScore 自身把关，这里测的是 boostRemaining 这个纯函数本身的行为。）
+	if got := boostRemaining(0, true); got != 100 {
+		t.Errorf("expected boostRemaining(0, true) == 100, got %d", got)
 	}
 }
 

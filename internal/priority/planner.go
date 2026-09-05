@@ -550,12 +550,6 @@ func windowPacingScore(remaining int64, resetAt time.Time, duration time.Duratio
 // 未来 14 天内（且尚未过期）时，视为"再不用就浪费"，需要更激进地消耗额度以便触发限流兑换。
 const codexResetCreditExpiryWindow = 14 * 24 * time.Hour
 
-// codexResetCreditBoostMultiplier 是命中提升条件时对 Remaining 施加的相对倍数（而非绝对
-// 百分点叠加）——windowPacingScore 对 remaining>=100 有专门的"满额天花板"分支，绝对值
-// +100 会让几乎所有有正余量的凭证瞬间撞进该分支、抹平彼此的相对紧急度差异；改为倍增
-// remainingRatio 只放大分子，让不同真实剩余量的凭证在提升后依然保有区分度。
-const codexResetCreditBoostMultiplier = 2
-
 // codexResetCreditBoostActive 判断是否应对该 Codex 凭证的本轮打分施加"即将过期额度"提升。
 // 仅限 Codex provider；要求存在 available 额度（AvailableResetCredits > 0）且其最近过期时间
 // 落在 (now, now+14d] 区间内——已过期（<=0）或超过 14 天的额度均不触发。
@@ -570,21 +564,22 @@ func codexResetCreditBoostActive(item PlanItem, now time.Time) bool {
 	return untilExpiry > 0 && untilExpiry <= codexResetCreditExpiryWindow
 }
 
-// boostRemaining 在命中提升条件时对窗口剩余百分比做相对倍增；不封顶——windowPacingScore
-// 的 remaining>=100 分支本身就会按 remainingRatio 的实际值区分不同原始剩余量的凭证，
-// 提前封顶反而会让多个提升后凭证的分数重新退化为同一个值。
+// boostRemaining 在命中提升条件时把窗口剩余百分比直接置满（100%），而不是在现有 remaining
+// 基础上叠加或倍增：未来 14 天内存在一条即将过期的银行化重置额度，意味着这个窗口应当被视为
+// 满额可用——哪怕真实剩余量很低甚至已经耗尽，也应该积极消耗以触发限流从而兑换掉这条即将作废
+// 的额度，而不是对现有剩余量做加成式提升。
 func boostRemaining(remaining int64, boost bool) int64 {
 	if !boost {
 		return remaining
 	}
-	return remaining * codexResetCreditBoostMultiplier
+	return 100
 }
 
 // pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
 // 遍历凭据的所有有效额度窗口（Windows），取最紧张（Pacing 分数最低，即瓶颈窗口）的那个；
 // 若无多窗口结构，则尝试短窗/长窗 legacy 字段，最终回退到单窗口启发式。
 // Codex 凭证若命中"即将过期的银行化重置额度"提升条件（见 codexResetCreditBoostActive），
-// 会在计算各窗口分数前对 Remaining 做相对倍增，鼓励更激进地消耗以避免额度浪费。
+// 会在计算各窗口分数前把 Remaining 直接置满（视为满额可用），鼓励更激进地消耗以避免额度浪费。
 func pacingScore(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
 		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响，也不受提升逻辑影响
