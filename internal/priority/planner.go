@@ -76,7 +76,7 @@ type PlanItem struct {
 	Credential core.Credential
 	Priority   int
 	// Weight 是本轮为该凭证算出的 CPA 加权轮询权重（仅对共享最高 priority tier
-	// 的健康凭证有意义，其余凭证保持零值）。语义与算法见 weightFromPacingScore。
+	// 的健康凭证有意义，其余凭证保持零值）。语义与算法见 weightFromHeadroom。
 	Weight            int
 	Disabled          bool
 	PlanType          core.PlanType
@@ -93,8 +93,9 @@ type PlanItem struct {
 	// ForceWrite 允许无本轮 fresh 证据的同伴因同 provider 优先级去重而写回宿主。
 	ForceWrite bool
 	Reason     string
-	// PacingScore 是排序时实际使用的 Pacing 健康度得分快照，供审计/展示使用。
-	PacingScore float64
+	// RemainingHeadroom 是排序时实际使用的配速富余度快照（remainingHeadroom 的结果，
+	// 与驱动 Weight 的是同一个指标），供审计/展示使用。
+	RemainingHeadroom float64
 	// AvailableResetCredits/NearestResetCreditExpiresAt 语义同 ProbeEvidence 同名字段。
 	AvailableResetCredits       int
 	NearestResetCreditExpiresAt *time.Time
@@ -128,7 +129,7 @@ func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, opti
 	ensureUniquePriorities(items, options)
 	sortPlanItems(items)
 	for i := range items {
-		items[i].PacingScore = pacingScore(items[i], options.Now)
+		items[i].RemainingHeadroom = remainingHeadroom(items[i], options.Now)
 	}
 	return Plan{Items: items, Changes: changes(items, options)}
 }
@@ -338,7 +339,7 @@ func ensureUniquePriorities(items []PlanItem, options Options) {
 		return
 	}
 	slices.SortStableFunc(nonTierGroup, func(left int, right int) int {
-		return compareUniquenessCandidates(items[left], items[right], options)
+		return compareUniquenessCandidates(items[left], items[right])
 	})
 	assigned := make(map[int]int, len(nonTierGroup))
 	used := make(map[int]struct{}, len(nonTierGroup)+1)
@@ -438,18 +439,10 @@ func needsStartRealign(items []PlanItem, group []int, options Options) bool {
 	return false
 }
 
-func compareUniquenessCandidates(left PlanItem, right PlanItem, options Options) int {
-	leftFreshPositive := left.EvidenceFresh && left.Remaining != nil && *left.Remaining > 0
-	rightFreshPositive := right.EvidenceFresh && right.Remaining != nil && *right.Remaining > 0
-	switch {
-	case leftFreshPositive && rightFreshPositive:
-		return compareCandidates(left, right, options)
-	case leftFreshPositive:
-		return -1
-	case rightFreshPositive:
-		return 1
-	}
-	// 无 fresh 同伴：较高现有优先级在前，其次 AuthIndex，保证稳定可复现。
+func compareUniquenessCandidates(left PlanItem, right PlanItem) int {
+	// 无 fresh 同伴：较高现有优先级在前，其次 AuthIndex，保证稳定可复现。这里不需要
+	// 任何"健康度"信号——调用方（ensureUniquePriorities）已经把本轮有 fresh 正向证据
+	// 的 tier 成员整体排除在外了，走到这里的两个候选永远都不是 tier 成员。
 	if left.Priority != right.Priority {
 		return right.Priority - left.Priority
 	}
@@ -487,74 +480,12 @@ func positiveCandidates(items []PlanItem) []int {
 	return candidates
 }
 
-func compareCandidates(left PlanItem, right PlanItem, options Options) int {
-	// 基于 Pacing 健康度评分排序：优先消耗剩余额度比例落后于时间流逝比例的账号
-	if scoreCmp := comparePacingScores(pacingScore(left, options.Now), pacingScore(right, options.Now)); scoreCmp != 0 {
-		return scoreCmp
-	}
-	if left.Remaining != nil && right.Remaining != nil && *left.Remaining != *right.Remaining {
-		if *left.Remaining > *right.Remaining {
-			return -1
-		}
-		return 1
-	}
-	if result := compareResetAt(left.ResetAt, right.ResetAt); result != 0 {
-		return result
-	}
-	return cmp.Compare(left.Credential.AuthIndex, right.Credential.AuthIndex)
-}
-
-const floatEpsilon = 1e-6
-
-func comparePacingScores(scoreLeft, scoreRight float64) int {
-	diff := scoreLeft - scoreRight
-	if diff > floatEpsilon {
-		return -1 // scoreLeft > scoreRight，left 优先
-	}
-	if diff < -floatEpsilon {
-		return 1 // scoreRight > scoreLeft，right 优先
-	}
-	return 0
-}
-
 const shortWindowDuration = 5 * time.Hour
 const longWindowDuration = 7 * 24 * time.Hour
-
-// windowPacingScore 计算单个窗口的 Pacing 健康度子分数（数值语义与原单窗口算法一致）。
-func windowPacingScore(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
-	if remaining <= 0 {
-		return 0
-	}
-	remainingRatio := float64(remaining) / 100.0
-	if remaining >= 100 {
-		return remainingRatio / 0.001
-	}
-
-	timeRemaining := resetAt.Sub(now)
-	if timeRemaining <= 0 {
-		return remainingRatio / 0.001
-	}
-
-	timeRemainingRatio := float64(timeRemaining) / float64(duration)
-	if timeRemainingRatio > 1.0 {
-		timeRemainingRatio = 1.0
-	}
-	if timeRemainingRatio < 0.001 {
-		timeRemainingRatio = 0.001
-	}
-
-	return remainingRatio / timeRemainingRatio
-}
 
 // codexResetCreditExpiryWindow 是"额度即将过期"的判定阈值：available 额度的过期时间落在
 // 未来 14 天内（且尚未过期）时，视为"再不用就浪费"，需要更激进地消耗额度以便触发限流兑换。
 const codexResetCreditExpiryWindow = 14 * 24 * time.Hour
-
-// codexResetCreditBoostMultiplier 是命中提升条件时对 Remaining 施加的相对倍数（而非绝对
-// 百分点叠加）——windowPacingScore 对 remaining>=100 有专门的"满额天花板"分支，绝对值
-// +100 会让几乎所有有正余量的凭证瞬间撞进该分支、抹平彼此的相对紧急度差异；改为倍增
-// remainingRatio 只放大分子，让不同真实剩余量的凭证在提升后依然保有区分度。
-const codexResetCreditBoostMultiplier = 2
 
 // codexResetCreditBoostActive 判断是否应对该 Codex 凭证的本轮打分施加"即将过期额度"提升。
 // 仅限 Codex provider；要求存在 available 额度（AvailableResetCredits > 0）且其最近过期时间
@@ -568,108 +499,6 @@ func codexResetCreditBoostActive(item PlanItem, now time.Time) bool {
 	}
 	untilExpiry := item.NearestResetCreditExpiresAt.Sub(now)
 	return untilExpiry > 0 && untilExpiry <= codexResetCreditExpiryWindow
-}
-
-// boostRemaining 在命中提升条件时对窗口剩余百分比做相对倍增；不封顶——windowPacingScore
-// 的 remaining>=100 分支本身就会按 remainingRatio 的实际值区分不同原始剩余量的凭证，
-// 提前封顶反而会让多个提升后凭证的分数重新退化为同一个值。
-func boostRemaining(remaining int64, boost bool) int64 {
-	if !boost {
-		return remaining
-	}
-	return remaining * codexResetCreditBoostMultiplier
-}
-
-// pacingScore 计算凭据的额度消耗健康度得分（Pacing / Burn Rate Ratio）。
-// 遍历凭据的所有有效额度窗口（Windows），取最紧张（Pacing 分数最低，即瓶颈窗口）的那个；
-// 若无多窗口结构，则尝试短窗/长窗 legacy 字段，最终回退到单窗口启发式。
-// Codex 凭证若命中"即将过期的银行化重置额度"提升条件（见 codexResetCreditBoostActive），
-// 会在计算各窗口分数前对 Remaining 做相对倍增，鼓励更激进地消耗以避免额度浪费。
-func pacingScore(item PlanItem, now time.Time) float64 {
-	if item.Remaining == nil || *item.Remaining <= 0 {
-		return 0 // 短路：primary 窗口已耗尽 = 当前不可用，不受多窗口逻辑影响，也不受提升逻辑影响
-	}
-	boost := codexResetCreditBoostActive(item, now)
-
-	if len(item.Windows) > 0 {
-		scores := make([]float64, 0, len(item.Windows))
-		for _, w := range item.Windows {
-			if w.Duration <= 0 || w.ResetAt.IsZero() {
-				continue
-			}
-			scores = append(scores, windowPacingScore(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
-		}
-		if len(scores) > 0 {
-			return slices.Min(scores)
-		}
-	}
-
-	scores := make([]float64, 0, 2)
-	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
-	}
-	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		scores = append(scores, windowPacingScore(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
-	}
-	if len(scores) > 0 {
-		return slices.Min(scores)
-	}
-
-	return legacyPacingScore(item, now, boost)
-}
-
-// legacyPacingScore 是新字段未提供时（xAI 等）的单窗口启发式回退路径。
-func legacyPacingScore(item PlanItem, now time.Time, boost bool) float64 {
-	remaining := boostRemaining(*item.Remaining, boost)
-	remainingRatio := float64(remaining) / 100.0
-
-	// 满额（Remaining=100%）账号优先处理：部分账号在额度周期 reset 后不会立即激活，
-	// 真实计费窗口从首次消费才开始计时，此时按剩余时间比例计分会把它们排到最后。
-	if remaining >= 100 {
-		return remainingRatio / 0.001
-	}
-
-	// 确定重置时间与所属周期总长度
-	// 仅当 LongWindowResetAt 与 ResetAt 指向同一时刻（或 ResetAt 缺失）时，才说明
-	// Remaining 本身就来自这个周窗口，可以用 7 天做基准；否则（如 xAI 日冷却+周账单）
-	// Remaining/ResetAt 来自另一个更短的窗口，绝不能借用 LongWindowResetAt 的时间做
-	// 分母，否则分子分母不是同一个窗口。
-	var resetAt *time.Time
-	var totalWindow time.Duration
-
-	if item.LongWindowResetAt != nil && (item.ResetAt == nil || item.ResetAt.Equal(*item.LongWindowResetAt)) {
-		resetAt = item.LongWindowResetAt
-		totalWindow = longWindowDuration
-	} else if item.ResetAt != nil {
-		resetAt = item.ResetAt
-		timeRemaining := resetAt.Sub(now)
-		if timeRemaining > 48*time.Hour {
-			totalWindow = longWindowDuration
-		} else if timeRemaining > 6*time.Hour {
-			totalWindow = 24 * time.Hour
-		} else {
-			totalWindow = shortWindowDuration
-		}
-	}
-
-	if resetAt == nil || totalWindow <= 0 {
-		return remainingRatio
-	}
-
-	timeRemaining := resetAt.Sub(now)
-	if timeRemaining <= 0 {
-		return remainingRatio / 0.001
-	}
-
-	timeRemainingRatio := float64(timeRemaining) / float64(totalWindow)
-	if timeRemainingRatio > 1.0 {
-		timeRemainingRatio = 1.0
-	}
-	if timeRemainingRatio < 0.001 {
-		timeRemainingRatio = 0.001
-	}
-
-	return remainingRatio / timeRemainingRatio
 }
 
 // windowRemainingHeadroom 计算单个窗口的"配速富余度"：距离配速目标用量，还可以多用掉多少
@@ -715,22 +544,38 @@ func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.D
 }
 
 // remainingHeadroom 是 windowRemainingHeadroom 的多窗口/多字段入口，窗口来源级联与瓶颈窗口
-// 选取（多窗口时取 headroom 最小的那个）完全复用 pacingScore 的结构：Windows 列表 ->
-// ShortWindowRemaining/LongWindowRemaining 短长窗口对 -> legacy 单窗口回退
-// （legacyRemainingHeadroom）。同样对 Codex "即将过期银行化重置额度" 应用 boostRemaining。
+// 选取（多窗口时取 headroom 最小的那个）：Windows 列表 -> ShortWindowRemaining/
+// LongWindowRemaining 短长窗口对 -> legacy 单窗口回退（legacyRemainingHeadroom）。
+//
+// Codex "即将过期银行化重置额度" 提升（见 codexResetCreditBoostActive）只作用于这条驱动
+// weight 的链路：在按正常规则算出瓶颈 headroom 之后，命中条件时直接 +1.0，不做任何上限
+// clamp。之所以不是把 headroom 封顶在 1.0（满额）：如果只封顶到 1.0，这个即将浪费的账号会
+// 和一个普通满额账号（headroom 同样是 1.0）算出完全一样的 weight，起不到"应该被优先消耗掉"
+// 的效果；不封顶让它的 headroom 能明显超过 1.0（比如 0.5+1.0=1.5），对应 weight 明显超过
+// 1000 这个正常上限，CPA 的 WeightedRoundRobinSelector 才会真的把更大比例的流量倾斜过去，
+// 加速消耗这笔即将作废的额度，这才是提升机制的本意。即使正常算出的 headroom 已经 floor 到
+// 0（已经落后于配速），+1.0 后仍能拿到 1.0，不会因为这类账号"原本就差"而在提升上吃亏。
 func remainingHeadroom(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
-		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier，这里仅保持与 pacingScore 对称
+		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier
 	}
-	boost := codexResetCreditBoostActive(item, now)
+	headroom := unboostedRemainingHeadroom(item, now)
+	if codexResetCreditBoostActive(item, now) {
+		headroom += 1.0
+	}
+	return headroom
+}
 
+// unboostedRemainingHeadroom 按正常规则（不含任何提升）计算瓶颈窗口的 headroom，供
+// remainingHeadroom 在此基础上叠加 Codex reset-credit 提升。
+func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	if len(item.Windows) > 0 {
 		headrooms := make([]float64, 0, len(item.Windows))
 		for _, w := range item.Windows {
 			if w.Duration <= 0 || w.ResetAt.IsZero() {
 				continue
 			}
-			headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
+			headrooms = append(headrooms, windowRemainingHeadroom(w.Remaining, w.ResetAt, w.Duration, now))
 		}
 		if len(headrooms) > 0 {
 			return slices.Min(headrooms)
@@ -739,22 +584,22 @@ func remainingHeadroom(item PlanItem, now time.Time) float64 {
 
 	headrooms := make([]float64, 0, 2)
 	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
+		headrooms = append(headrooms, windowRemainingHeadroom(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
 	}
 	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
+		headrooms = append(headrooms, windowRemainingHeadroom(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
 	}
 	if len(headrooms) > 0 {
 		return slices.Min(headrooms)
 	}
 
-	return legacyRemainingHeadroom(item, now, boost)
+	return legacyRemainingHeadroom(item, now)
 }
 
-// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径，窗口/周期总长的
-// 确定逻辑与 legacyPacingScore 完全一致，只是最终分数从"除法"换成"减法"。
-func legacyRemainingHeadroom(item PlanItem, now time.Time, boost bool) float64 {
-	remaining := boostRemaining(*item.Remaining, boost)
+// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径。不含提升逻辑——
+// 由 remainingHeadroom 统一在最终结果上叠加。
+func legacyRemainingHeadroom(item PlanItem, now time.Time) float64 {
+	remaining := *item.Remaining
 	if remaining >= 100 {
 		return 1.0
 	}
@@ -811,23 +656,6 @@ func paidRank(planType core.PlanType) int {
 		return 0
 	default:
 		return 0
-	}
-}
-
-func compareResetAt(left *time.Time, right *time.Time) int {
-	switch {
-	case left == nil && right == nil:
-		return 0
-	case left == nil:
-		return 1
-	case right == nil:
-		return -1
-	case left.Equal(*right):
-		return 0
-	case left.Before(*right):
-		return -1
-	default:
-		return 1
 	}
 }
 
@@ -891,9 +719,9 @@ func shouldChange(item PlanItem, options Options) bool {
 			item.Credential.PriorityMissing
 	}
 	if item.Reason == "fresh remaining positive" {
-		// tier 内本轮 Priority 保持不变，但 Weight 需要跟随 pacing score 每轮
+		// tier 内本轮 Priority 保持不变，但 Weight 需要跟随 headroom 每轮
 		// 刷新写回；CPA host.auth.list 当前不回传 weight 字段，无法读回当前值
-		// 做等值比较，因此 tier 成员统一按“本轮总是变化”处理。
+		// 做等值比较，因此 tier 成员统一按"本轮总是变化"处理。
 		return true
 	}
 	if item.Credential.PriorityMissing {

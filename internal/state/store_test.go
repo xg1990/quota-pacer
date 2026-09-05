@@ -224,7 +224,7 @@ func TestStore_ResetCreditsPersistence(t *testing.T) {
 
 // TestStore_SchemaVersionMismatchForcesReprobe 回归覆盖：v1.0.5 曾在 Entry/ProbeSuccess 增补
 // 多窗口字段（ShortWindowRemaining/LongWindowRemaining）却未递增 SchemaVersion，导致升级前
-// 写入的旧缓存条目被当作“完整有效”继续回放，pacingScore 因缺字段静默退化为 legacy 单窗口口径，
+// 写入的旧缓存条目被当作”完整有效”继续回放，remainingHeadroom 因缺字段静默退化为 legacy 单窗口口径，
 // 与后续基于 fresh evidence 冻结的 priority 产生视觉上的不一致。此测试确保版本不匹配的旧条目
 // 会被 NeedsProbe 判定为需要重新探测、被 ValidEntry 判定为无效（不会被当作缓存证据回放）。
 func TestStore_SchemaVersionMismatchForcesReprobe(t *testing.T) {
