@@ -9,7 +9,7 @@ import (
 
 func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
-	resetAt := now.Add(30 * time.Hour) // not near reset (> 24h)
+	resetAt := now.Add(1 * time.Hour) // <=6h -> legacy 5h 分档基准，timeRemainingRatio=0.2，不会被 clamp 抹平差异
 	rem1 := int64(45)
 	rem2 := int64(30)
 
@@ -86,14 +86,10 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	if item2.Priority != 100 {
 		t.Errorf("expected item2 priority 100 (shared fresh-positive tier), got %d", item2.Priority)
 	}
-	maxScore := item1.PacingScore
-	if item2.PacingScore > maxScore {
-		maxScore = item2.PacingScore
-	}
-	if want := weightFromPacingScore(item1.PacingScore, maxScore); item1.Weight != want {
+	if want := weightFromHeadroom(remainingHeadroom(*item1, now)); item1.Weight != want {
 		t.Errorf("expected item1 weight %d, got %d", want, item1.Weight)
 	}
-	if want := weightFromPacingScore(item2.PacingScore, maxScore); item2.Weight != want {
+	if want := weightFromHeadroom(remainingHeadroom(*item2, now)); item2.Weight != want {
 		t.Errorf("expected item2 weight %d, got %d", want, item2.Weight)
 	}
 	if item1.Weight <= item2.Weight {
@@ -226,17 +222,11 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 	}
 
 	// 共享健康 tier：跨 Provider 相同证据 -> 相同 priority(100) + 相同 weight
-	maxScore := 0.0
-	for _, item := range plan.Items {
-		if item.PacingScore > maxScore {
-			maxScore = item.PacingScore
-		}
-	}
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -321,25 +311,22 @@ func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
 
 	priorityByAuth := make(map[string]int)
 	weightByAuth := make(map[string]int)
-	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
 		weightByAuth[item.Credential.AuthIndex] = item.Weight
-		if item.PacingScore > maxScore {
-			maxScore = item.PacingScore
-		}
 	}
 
-	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按 pacing score 区分流量占比。
+	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按"距离配速目标还能多用多少"区分流量占比。
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
-	// 预期 weight 排序：Claude (score 1.99) > Codex (score 1.12) > Antigravity (score 0.78)
+	// 预期 weight 排序（headroom = remainingRatio - timeRemainingRatio，均走 7d 长窗口基准）：
+	// Claude 0.51-43/168≈0.254 > Codex 0.80-120/168≈0.086 > Antigravity 0.65-140/168<0（floor 0）
 	if weightByAuth["auth-claude-urgent"] <= weightByAuth["auth-codex-mid"] {
 		t.Errorf("expected claude weight > codex weight, got claude=%d codex=%d",
 			weightByAuth["auth-claude-urgent"], weightByAuth["auth-codex-mid"])
@@ -422,25 +409,22 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 
 	priorityByAuth := make(map[string]int)
 	weightByAuth := make(map[string]int)
-	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
 		weightByAuth[item.Credential.AuthIndex] = item.Weight
-		if item.PacingScore > maxScore {
-			maxScore = item.PacingScore
-		}
 	}
 
-	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按 pacing score 区分流量占比。
+	// 共享健康 tier：全部凭证 priority=100，只靠 weight 按"距离配速目标还能多用多少"区分流量占比。
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
-	// 预期 weight 排序：auth-slow (score 2.80) > auth-mid (score 1.40) > auth-fast (score 0.35)
+	// headroom（均走 7d 长窗口基准）：auth-slow 0.80-48/168≈0.514 > auth-mid 0.80-96/168≈0.229
+	// > auth-fast 0.10-48/168<0（floor 0）
 	if weightByAuth["auth-slow"] <= weightByAuth["auth-mid"] {
 		t.Errorf("expected auth-slow weight > auth-mid weight, got slow=%d mid=%d", weightByAuth["auth-slow"], weightByAuth["auth-mid"])
 	}
@@ -550,22 +534,18 @@ func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
 
 	priorityByAuth := make(map[string]int)
 	weightByAuth := make(map[string]int)
-	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
 		weightByAuth[item.Credential.AuthIndex] = item.Weight
-		if item.PacingScore > maxScore {
-			maxScore = item.PacingScore
-		}
 	}
 
-	// 共享健康 tier：满额账号（score 走 remaining>=100 特判分支，远高于 urgent）
+	// 共享健康 tier：满额账号（remaining>=100 特判直接给满 headroom=1.0）
 	// 与即将过期账号 priority 都是 100，只靠 weight 体现悬殊差距。
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -629,23 +609,19 @@ func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
 
 	priorityByAuth := make(map[string]int)
 	weightByAuth := make(map[string]int)
-	maxScore := 0.0
 	for _, item := range plan.Items {
 		priorityByAuth[item.Credential.AuthIndex] = item.Priority
 		weightByAuth[item.Credential.AuthIndex] = item.Weight
-		if item.PacingScore > maxScore {
-			maxScore = item.PacingScore
-		}
 	}
 
-	// 移除 paid-first 规则后，纯按 PacingScore 排序：
-	// auth-ag-free (score = 1.000 / 1.000 = 1.0) 应比 auth-codex-plus (score = 0.33 / (139/168) ≈ 0.399) 权重更高，
-	// 但共享同一个 priority tier（100），不再靠 priority 差异体现。
+	// 移除 paid-first 规则后，纯按"距离配速目标还能多用多少"排序：
+	// auth-ag-free 满额 -> headroom=1.0 满值；auth-codex-plus 0.33-139/168<0 -> floor 0。
+	// 两者共享同一个 priority tier（100），不再靠 priority 差异体现。
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromPacingScore(item.PacingScore, maxScore); item.Weight != want {
+		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -990,9 +966,18 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 	if plan.Changes[0].Priority != 100 {
 		t.Errorf("expected fresh item assigned top priority 100, got %d", plan.Changes[0].Priority)
 	}
-	// 单一 tier 成员：score 即 maxScore，weight 应为满值。
-	if plan.Changes[0].Weight != weightScaleReference {
-		t.Errorf("expected sole tier member weight %d, got %d", weightScaleReference, plan.Changes[0].Weight)
+	// 单一 tier 成员：weight 由自身 remaining-pace headroom 决定，不再是"唯一成员就必然满值"。
+	var freshItem *PlanItem
+	for i := range plan.Items {
+		if plan.Items[i].Credential.AuthIndex == "auth-fresh" {
+			freshItem = &plan.Items[i]
+		}
+	}
+	if freshItem == nil {
+		t.Fatalf("fresh item not found in items")
+	}
+	if want := weightFromHeadroom(remainingHeadroom(*freshItem, now)); plan.Changes[0].Weight != want {
+		t.Errorf("expected sole tier member weight %d, got %d", want, plan.Changes[0].Weight)
 	}
 
 	// Cached item retains priority 50
@@ -1198,29 +1183,176 @@ func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T
 	}
 }
 
-// --- weightFromPacingScore ---
+// TestPlanFreshOnly_OverPaceAccountStillGetsFloorWeightInSharedTier 覆盖用户明确要求的场景：
+// 共享 tier 内一个已经落后于配速目标（remainingHeadroom floor 到 0）的账号，仍必须以
+// weight=weightFloor（1，不是 0）出现在最终 Plan 里，并进入 Changes（不能被跳过/排除），
+// 才能继续参与 CPA WeightedRoundRobinSelector 的轮转。
+func TestPlanFreshOnly_OverPaceAccountStillGetsFloorWeightInSharedTier(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 
-func TestWeightFromPacingScore_EqualToMaxGetsFullWeight(t *testing.T) {
-	if got := weightFromPacingScore(1.5, 1.5); got != weightScaleReference {
-		t.Errorf("expected weight %d when score==maxScore, got %d", weightScaleReference, got)
+	healthyReset := now.Add(1 * time.Hour) // <=6h -> 5h 分档基准
+	healthyRem := int64(90)
+
+	overPaceReset := now.Add(90 * time.Hour)
+	overPaceRem := int64(5)
+
+	credentials := []core.Credential{
+		{Name: "healthy", AuthIndex: "auth-healthy", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+		{Name: "over-pace", AuthIndex: "auth-over-pace", Provider: core.ProviderClaude, Type: core.CredentialTypeClaude},
+	}
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "auth-healthy",
+			ObservedAt:    now,
+			ResetAt:       &healthyReset,
+			Remaining:     &healthyRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "auth-over-pace",
+			ObservedAt:    now,
+			ResetAt:       &overPaceReset,
+			Remaining:     &overPaceRem,
+			Windows:       []core.QuotaWindow{{Name: "custom", Duration: 100 * time.Hour, Remaining: 5, ResetAt: overPaceReset}},
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 2 {
+		t.Fatalf("expected 2 plan items, got %d", len(plan.Items))
+	}
+
+	var overPaceItem *PlanItem
+	for i := range plan.Items {
+		if plan.Items[i].Credential.AuthIndex == "auth-over-pace" {
+			overPaceItem = &plan.Items[i]
+		}
+		if plan.Items[i].Priority != 100 {
+			t.Errorf("expected shared tier priority 100 for %s, got %d", plan.Items[i].Credential.Name, plan.Items[i].Priority)
+		}
+	}
+	if overPaceItem == nil {
+		t.Fatalf("over-pace item not found in plan.Items")
+	}
+	if overPaceItem.Weight != weightFloor {
+		t.Errorf("expected over-pace account weight floored at %d, got %d", weightFloor, overPaceItem.Weight)
+	}
+
+	var overPaceChange *Change
+	for i := range plan.Changes {
+		if plan.Changes[i].Credential.AuthIndex == "auth-over-pace" {
+			overPaceChange = &plan.Changes[i]
+		}
+	}
+	if overPaceChange == nil {
+		t.Fatalf("expected over-pace account to appear in plan.Changes (not be excluded), but it was missing")
+	}
+	if overPaceChange.Weight != weightFloor {
+		t.Errorf("expected over-pace account's Change.Weight floored at %d, got %d", weightFloor, overPaceChange.Weight)
 	}
 }
 
-func TestWeightFromPacingScore_ProportionalMidpoint(t *testing.T) {
-	if got := weightFromPacingScore(500, 1000); got != 500 {
-		t.Errorf("expected weight 500 for half-of-max score, got %d", got)
+// --- weightFromHeadroom / remainingHeadroom ---
+
+func TestWeightFromHeadroom_FullHeadroomGetsFullWeight(t *testing.T) {
+	if got := weightFromHeadroom(1.0); got != weightScaleReference {
+		t.Errorf("expected weight %d for headroom=1.0, got %d", weightScaleReference, got)
 	}
 }
 
-func TestWeightFromPacingScore_FlooredAtOneForNearZeroRatio(t *testing.T) {
-	if got := weightFromPacingScore(0.0001, 1000); got != weightFloor {
-		t.Errorf("expected weight floored at %d for near-zero ratio, got %d", weightFloor, got)
+func TestWeightFromHeadroom_ProportionalMidpoint(t *testing.T) {
+	if got := weightFromHeadroom(0.5); got != 500 {
+		t.Errorf("expected weight 500 for headroom=0.5, got %d", got)
 	}
 }
 
-func TestWeightFromPacingScore_DegenerateMaxScoreZero(t *testing.T) {
-	if got := weightFromPacingScore(0, 0); got != weightFloor {
-		t.Errorf("expected weight %d when maxScore<=epsilon, got %d", weightFloor, got)
+func TestWeightFromHeadroom_FlooredAtOneForNearZeroHeadroom(t *testing.T) {
+	if got := weightFromHeadroom(0.0001); got != weightFloor {
+		t.Errorf("expected weight floored at %d for near-zero headroom, got %d", weightFloor, got)
+	}
+}
+
+// TestWeightFromHeadroom_FlooredAtOneWhenOverPace 覆盖用户明确要求的场景：已经落后于配速目标
+// （headroom 算出来是 0，即"超标使用"）的账号，weight 不能归零，必须保留 weightFloor（1）继续
+// 参与 CPA WeightedRoundRobinSelector 的轮转——weight<=0 会被该 selector 的
+// positiveWeightAuths 过滤器直接踢出轮转，0 不是"一点点流量"，是"完全没有"。
+func TestWeightFromHeadroom_FlooredAtOneWhenOverPace(t *testing.T) {
+	if got := weightFromHeadroom(0); got != weightFloor {
+		t.Errorf("expected over-pace account (headroom=0) to floor at weight %d, got %d", weightFloor, got)
+	}
+}
+
+func TestRemainingHeadroom_FullRemainingSpecialCase(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(168 * time.Hour)
+	rem := int64(100)
+	item := PlanItem{
+		Credential: core.Credential{Provider: core.ProviderClaude},
+		Remaining:  &rem,
+		ResetAt:    &resetAt,
+	}
+	if got := remainingHeadroom(item, now); got != 1.0 {
+		t.Errorf("expected full remaining (未激活周期) to short-circuit to headroom 1.0, got %.6f", got)
+	}
+}
+
+func TestRemainingHeadroom_StaleResetAtAlreadyPassed(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(-time.Hour) // reset 时间已过但 remaining 尚未刷新
+	rem := int64(60)
+	item := PlanItem{
+		Credential: core.Credential{Provider: core.ProviderClaude},
+		Remaining:  &rem,
+		ResetAt:    &resetAt,
+	}
+	if got := remainingHeadroom(item, now); got != 1.0 {
+		t.Errorf("expected stale already-passed resetAt to short-circuit to headroom 1.0, got %.6f", got)
+	}
+}
+
+func TestRemainingHeadroom_OverPaceFloorsToZero(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	// 5% 剩余，但只过了 10% 的窗口时间——远落后于配速目标，headroom 应 floor 到 0（不是负数）。
+	resetAt := now.Add(90 * time.Hour) // 10% 时间流逝对应 100h 窗口中的 10h 已过，还剩 90h
+	rem := int64(5)
+	item := PlanItem{
+		Credential: core.Credential{Provider: core.ProviderClaude},
+		Remaining:  &rem,
+		ResetAt:    &resetAt,
+		Windows:    []core.QuotaWindow{{Name: "custom", Duration: 100 * time.Hour, Remaining: 5, ResetAt: resetAt}},
+	}
+	if got := remainingHeadroom(item, now); got != 0 {
+		t.Errorf("expected over-pace account to floor headroom at 0, got %.6f", got)
+	}
+}
+
+func TestRemainingHeadroom_MultiWindowBottleneckIsMinHeadroom(t *testing.T) {
+	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	rem := int64(80)
+	item := PlanItem{
+		Credential: core.Credential{Provider: core.ProviderCodex},
+		Remaining:  &rem,
+		Windows: []core.QuotaWindow{
+			// 5h 窗口：80% 剩余，4h 后重置 -> timeRemainingRatio=4/5=0.8 -> headroom=0.8-0.8=0
+			{Name: "5h", Duration: 5 * time.Hour, Remaining: 80, ResetAt: now.Add(4 * time.Hour)},
+			// 30d 窗口：80% 剩余，15d 后重置 -> timeRemainingRatio=15/30=0.5 -> headroom=0.8-0.5=0.3
+			{Name: "monthly", Duration: 30 * 24 * time.Hour, Remaining: 80, ResetAt: now.Add(15 * 24 * time.Hour)},
+		},
+	}
+	// 瓶颈窗口应取 headroom 更小的那个（5h 窗口，headroom=0），而不是 30d 窗口的 0.3。
+	if got := remainingHeadroom(item, now); got != 0 {
+		t.Errorf("expected bottleneck window (min headroom) to dominate, got %.6f", got)
 	}
 }
 

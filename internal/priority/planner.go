@@ -219,14 +219,12 @@ func isXAICredential(credential core.Credential) bool {
 	return planItemProvider(PlanItem{Credential: credential}) == core.ProviderXAI
 }
 
-// weightScaleReference is the reference weight assigned to the pacing-score
-// leader within a shared top-priority tier; every other tier member's weight
-// is this value scaled by its own score's proportion of the leader's score
-// (weightFromPacingScore). Kept well below CPA's [0, 1_000_000] weight
-// ceiling (credentialweight.Max) so tier weights stay human-readable in the
-// CPA management UI (e.g. 1000/340/12 instead of unwieldy six-digit
-// numbers) while leaving ample headroom (1000x) for future fine-grained
-// tuning.
+// weightScaleReference is the reference weight assigned to a fresh-positive
+// tier member with a full [0,1] remaining-pace headroom (weightFromHeadroom).
+// Kept well below CPA's [0, 1_000_000] weight ceiling (credentialweight.Max)
+// so tier weights stay human-readable in the CPA management UI (e.g.
+// 1000/340/12 instead of unwieldy six-digit numbers) while leaving ample
+// headroom (1000x) for future fine-grained tuning.
 const weightScaleReference = 1000
 
 // weightFloor is the minimum weight ever assigned to a fresh-positive tier
@@ -234,24 +232,20 @@ const weightScaleReference = 1000
 // weight<=0 from the rotation entirely (its positiveWeightAuths filter) —
 // weight 0 is not "a tiny trickle of traffic", it is "none at all". Flooring
 // at 1 guarantees every currently-healthy credential in the shared tier
-// keeps at least a minimal share, so a merely-weaker (but still
-// positive-remaining) account is never fully starved out.
+// keeps at least a minimal share — including one that has already burned
+// past its pace target (remainingHeadroom floors to 0 for it) — so it is
+// never fully starved out of the rotation.
 const weightFloor = 1
 
-// weightFromPacingScore maps one tier member's pacing score to an integer
-// CPA weight, linearly proportional to the tier's highest score this round
-// (weightScaleReference for the leader, scaled down for everyone else),
-// floored at weightFloor. Equal scores naturally produce equal weights — no
-// special-casing needed, it falls out of the linear ratio. maxScore <=
-// floatEpsilon (every tier member's pacing score is effectively zero — e.g.
-// each one's bottleneck window happens to be exhausted despite a positive
-// primary Remaining) falls back to an equal weightFloor for all members
-// rather than dividing by zero.
-func weightFromPacingScore(score float64, maxScore float64) int {
-	if maxScore <= floatEpsilon {
-		return weightFloor
-	}
-	weight := int(math.Round(weightScaleReference * score / maxScore))
+// weightFromHeadroom maps a tier member's remaining-pace headroom (see
+// remainingHeadroom, already floored to [0,1]) to an integer CPA weight,
+// linearly proportional to weightScaleReference, floored at weightFloor.
+// headroom=1.0 (full remaining-pace headroom) -> weightScaleReference;
+// headroom=0 (already burned past pace target, no headroom left) still maps
+// to weightFloor rather than 0, so it keeps a minimal share of traffic
+// instead of being excluded from CPA's weighted rotation entirely.
+func weightFromHeadroom(headroom float64) int {
+	weight := int(math.Round(weightScaleReference * headroom))
 	if weight < weightFloor {
 		return weightFloor
 	}
@@ -261,11 +255,13 @@ func weightFromPacingScore(score float64, maxScore float64) int {
 // planFreshPositive assigns every fresh-positive candidate (this round's
 // live probe evidence, Remaining > 0) to the SAME shared top priority,
 // replacing the old strictly-unique-descending-priority ranking. Relative
-// health is now expressed entirely through Weight (weightFromPacingScore),
-// which CPA's weighted-round-robin scheduler uses to proportionally split
-// concurrent traffic among same-priority credentials — see
-// ensureUniquePriorities for why this intentional sharing does not get
-// "corrected" back into unique slots.
+// health is now expressed entirely through Weight (weightFromHeadroom, driven
+// by remainingHeadroom — "距离配速目标用量，还可以多用掉多少百分比" — not by
+// how the pacing score ranks against the tier's other members), which CPA's
+// weighted-round-robin scheduler uses to proportionally split concurrent
+// traffic among same-priority credentials — see ensureUniquePriorities for
+// why this intentional sharing does not get "corrected" back into unique
+// slots.
 func planFreshPositive(items []PlanItem, options Options) {
 	candidates := positiveCandidates(items)
 	if len(candidates) == 0 {
@@ -276,18 +272,10 @@ func planFreshPositive(items []PlanItem, options Options) {
 		sharedPriority = 100
 	}
 
-	scores := make([]float64, len(candidates))
-	maxScore := 0.0
-	for i, itemIndex := range candidates {
-		scores[i] = pacingScore(items[itemIndex], options.Now)
-		if scores[i] > maxScore {
-			maxScore = scores[i]
-		}
-	}
-
-	for i, itemIndex := range candidates {
+	for _, itemIndex := range candidates {
+		headroom := remainingHeadroom(items[itemIndex], options.Now)
 		items[itemIndex].Priority = sharedPriority
-		items[itemIndex].Weight = weightFromPacingScore(scores[i], maxScore)
+		items[itemIndex].Weight = weightFromHeadroom(headroom)
 		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
 		items[itemIndex].Disabled = false
 		items[itemIndex].Reason = "fresh remaining positive"
@@ -682,6 +670,137 @@ func legacyPacingScore(item PlanItem, now time.Time, boost bool) float64 {
 	}
 
 	return remainingRatio / timeRemainingRatio
+}
+
+// windowRemainingHeadroom 计算单个窗口的"配速富余度"：距离配速目标用量，还可以多用掉多少
+// 配额比例（0..1），而不是距离硬上限（100%）还剩多少。
+//
+// 配速目标已用比例 = 1 - timeRemainingRatio（这个窗口已经流逝的时间比例，假设配额应随时间
+// 匀速消耗，此刻"本该"用掉这么多）；实际已用比例 = 1 - remainingRatio。两者之差
+// （配速目标已用比例 - 实际已用比例，等价于 remainingRatio - timeRemainingRatio）就是
+// "追上配速目标之前，还能多用掉多少百分比"。若实际已用比例已经追上或超过配速目标（差值为
+// 负），说明没有富余空间了，floor 到 0——注意这里只把"没有富余"floor 到 0，最终写回 CPA
+// 的整数 weight 仍会在 weightFromHeadroom 里被 floor 到 weightFloor（而非 0），避免这类
+// "已落后于配速"的账号被 WeightedRoundRobinSelector 的 weight<=0 过滤器踢出轮转。
+//
+// 两处边界特判（均直接给满 headroom=1.0，不计算时间比例）：
+//   - remaining>=100：额度周期到点但计费尚未真正开始（部分 provider 的计费窗口从首次消费才
+//     开始计时），此时剩余时间比例不可信，视同"完全没有落后于配速"。
+//   - timeRemaining<=0：reset 时间已过但 remaining 尚未刷新（陈旧/边界数据），同样不信任此刻
+//     算出的时间比例，按满 headroom 处理。
+func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
+	if remaining >= 100 {
+		return 1.0
+	}
+	remainingRatio := float64(remaining) / 100.0
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return 1.0
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(duration)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	headroom := remainingRatio - timeRemainingRatio
+	if headroom < 0 {
+		headroom = 0
+	}
+	return headroom
+}
+
+// remainingHeadroom 是 windowRemainingHeadroom 的多窗口/多字段入口，窗口来源级联与瓶颈窗口
+// 选取（多窗口时取 headroom 最小的那个）完全复用 pacingScore 的结构：Windows 列表 ->
+// ShortWindowRemaining/LongWindowRemaining 短长窗口对 -> legacy 单窗口回退
+// （legacyRemainingHeadroom）。同样对 Codex "即将过期银行化重置额度" 应用 boostRemaining。
+func remainingHeadroom(item PlanItem, now time.Time) float64 {
+	if item.Remaining == nil || *item.Remaining <= 0 {
+		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier，这里仅保持与 pacingScore 对称
+	}
+	boost := codexResetCreditBoostActive(item, now)
+
+	if len(item.Windows) > 0 {
+		headrooms := make([]float64, 0, len(item.Windows))
+		for _, w := range item.Windows {
+			if w.Duration <= 0 || w.ResetAt.IsZero() {
+				continue
+			}
+			headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(w.Remaining, boost), w.ResetAt, w.Duration, now))
+		}
+		if len(headrooms) > 0 {
+			return slices.Min(headrooms)
+		}
+	}
+
+	headrooms := make([]float64, 0, 2)
+	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
+		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.ShortWindowRemaining, boost), *item.ShortWindowResetAt, shortWindowDuration, now))
+	}
+	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
+		headrooms = append(headrooms, windowRemainingHeadroom(boostRemaining(*item.LongWindowRemaining, boost), *item.LongWindowResetAt, longWindowDuration, now))
+	}
+	if len(headrooms) > 0 {
+		return slices.Min(headrooms)
+	}
+
+	return legacyRemainingHeadroom(item, now, boost)
+}
+
+// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径，窗口/周期总长的
+// 确定逻辑与 legacyPacingScore 完全一致，只是最终分数从"除法"换成"减法"。
+func legacyRemainingHeadroom(item PlanItem, now time.Time, boost bool) float64 {
+	remaining := boostRemaining(*item.Remaining, boost)
+	if remaining >= 100 {
+		return 1.0
+	}
+	remainingRatio := float64(remaining) / 100.0
+
+	var resetAt *time.Time
+	var totalWindow time.Duration
+
+	if item.LongWindowResetAt != nil && (item.ResetAt == nil || item.ResetAt.Equal(*item.LongWindowResetAt)) {
+		resetAt = item.LongWindowResetAt
+		totalWindow = longWindowDuration
+	} else if item.ResetAt != nil {
+		resetAt = item.ResetAt
+		timeRemaining := resetAt.Sub(now)
+		if timeRemaining > 48*time.Hour {
+			totalWindow = longWindowDuration
+		} else if timeRemaining > 6*time.Hour {
+			totalWindow = 24 * time.Hour
+		} else {
+			totalWindow = shortWindowDuration
+		}
+	}
+
+	if resetAt == nil || totalWindow <= 0 {
+		// 没有任何可用的重置时间信息，无法推算配速目标，把全部剩余都当作富余。
+		return remainingRatio
+	}
+
+	timeRemaining := resetAt.Sub(now)
+	if timeRemaining <= 0 {
+		return 1.0
+	}
+
+	timeRemainingRatio := float64(timeRemaining) / float64(totalWindow)
+	if timeRemainingRatio > 1.0 {
+		timeRemainingRatio = 1.0
+	}
+	if timeRemainingRatio < 0.001 {
+		timeRemainingRatio = 0.001
+	}
+
+	headroom := remainingRatio - timeRemainingRatio
+	if headroom < 0 {
+		headroom = 0
+	}
+	return headroom
 }
 
 func paidRank(planType core.PlanType) int {
