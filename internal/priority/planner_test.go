@@ -337,7 +337,7 @@ func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
+func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 	now := time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)
 	// Account 1: reset in 2 days (48h), 80% remaining -> score = 0.80 / (48/168) = 2.80
 	reset2Days := now.Add(48 * time.Hour)
@@ -433,7 +433,7 @@ func TestPlanFreshOnly_PacingScore_WeeklyWindow(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_CodexDualWindowMismatch(t *testing.T) {
+func TestPlanFreshOnly_Headroom_CodexDualWindowMismatch(t *testing.T) {
 	now := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
 
 	// Codex 双窗口场景：Remaining/ResetAt 来自 5 小时窗口（3 小时后重置），
@@ -468,16 +468,17 @@ func TestPlanFreshOnly_PacingScore_CodexDualWindowMismatch(t *testing.T) {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 
-	// 期望：score = 0.50 / (3h/5h) ≈ 0.8333。若退化回旧逻辑（无条件 7 天基准）
-	// 会得到 0.50 / (3h/168h) ≈ 28.0，两者差距悬殊，足以捕捉回归。
-	got := plan.Items[0].PacingScore
-	want := 0.5 / (3.0 / 5.0)
+	// 期望：headroom = 0.50 - 3h/5h = -0.1 -> floor 0（已落后于配速）。若退化回旧逻辑
+	// （无条件借用 7 天基准）会得到 0.50 - 3h/168h ≈ 0.482（明显富余），两者差距悬殊，
+	// 足以捕捉回归。
+	got := plan.Items[0].RemainingHeadroom
+	want := 0.0
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacing score %.6f, got %.6f", want, got)
+		t.Errorf("expected headroom %.6f, got %.6f", want, got)
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
+func TestPlanFreshOnly_Headroom_FullRemainingWins(t *testing.T) {
 	now := time.Date(2026, 8, 27, 9, 0, 0, 0, time.UTC)
 
 	// 刚重置的满额账号：周期还有整整 7 天，按旧公式 score = 1.0/1.0 = 1.0（全局最低档之一）。
@@ -555,7 +556,7 @@ func TestPlanFreshOnly_PacingScore_FullRemainingWins(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
+func TestPlanFreshOnly_Headroom_FreeVersusPaid(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	resetWeekly := now.Add(168 * time.Hour)
 	resetPlus := now.Add(139 * time.Hour)
@@ -631,13 +632,13 @@ func TestPlanFreshOnly_PacingScore_FreeVersusPaid(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_MultiWindow_ShortWindowTighter(t *testing.T) {
+func TestPlanFreshOnly_Headroom_MultiWindow_ShortWindowTighter(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 
-	// 短窗口：10% 剩余，1h 后重置 -> score = 0.10 / (1/5) = 0.50（更紧张）
+	// 短窗口：10% 剩余，1h 后重置 -> headroom = 0.10 - 1/5 = -0.1 -> floor 0（更紧张）
 	shortReset := now.Add(1 * time.Hour)
 	shortRem := int64(10)
-	// 长窗口：80% 剩余，84h 后重置 -> score = 0.80 / (84/168) = 1.60
+	// 长窗口：80% 剩余，84h 后重置 -> headroom = 0.80 - 84/168 = 0.30
 	longReset := now.Add(84 * time.Hour)
 	longRem := int64(80)
 	primaryRem := int64(50) // 主字段仅用于通过顶部短路，不驱动分档
@@ -668,20 +669,20 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_ShortWindowTighter(t *testing.T) 
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 
-	got := plan.Items[0].PacingScore
-	want := 0.10 / (1.0 / 5.0)
+	got := plan.Items[0].RemainingHeadroom
+	want := 0.0
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacing score %.6f (short window wins), got %.6f", want, got)
+		t.Errorf("expected headroom %.6f (short window wins as bottleneck), got %.6f", want, got)
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_MultiWindow_LongWindowTighter(t *testing.T) {
+func TestPlanFreshOnly_Headroom_MultiWindow_LongWindowTighter(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 
-	// 短窗口：80% 剩余，1h 后重置 -> score = 0.80 / (1/5) = 4.00
+	// 短窗口：80% 剩余，1h 后重置 -> headroom = 0.80 - 1/5 = 0.60
 	shortReset := now.Add(1 * time.Hour)
 	shortRem := int64(80)
-	// 长窗口：10% 剩余，84h 后重置 -> score = 0.10 / (84/168) = 0.20（更紧张）
+	// 长窗口：10% 剩余，84h 后重置 -> headroom = 0.10 - 84/168 = -0.4 -> floor 0（更紧张）
 	longReset := now.Add(84 * time.Hour)
 	longRem := int64(10)
 	primaryRem := int64(50)
@@ -712,18 +713,18 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_LongWindowTighter(t *testing.T) {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 
-	got := plan.Items[0].PacingScore
-	want := 0.10 / (84.0 / 168.0)
+	got := plan.Items[0].RemainingHeadroom
+	want := 0.0
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacing score %.6f (long window wins), got %.6f", want, got)
+		t.Errorf("expected headroom %.6f (long window wins as bottleneck), got %.6f", want, got)
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_MultiWindow_LongOnlyFallback(t *testing.T) {
+func TestPlanFreshOnly_Headroom_MultiWindow_LongOnlyFallback(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 
 	// 模拟只上报长窗口数据的场景（如 Codex weekly-only 付费计划）：
-	// ShortWindow* 全为 nil，应走"只有一个窗口分数"分支，不报错。
+	// ShortWindow* 全为 nil，应走"只有一个窗口 headroom"分支，不报错。
 	longReset := now.Add(42 * time.Hour)
 	longRem := int64(64)
 	primaryRem := int64(64)
@@ -752,60 +753,14 @@ func TestPlanFreshOnly_PacingScore_MultiWindow_LongOnlyFallback(t *testing.T) {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 
-	got := plan.Items[0].PacingScore
-	want := 0.64 / (42.0 / 168.0)
+	got := plan.Items[0].RemainingHeadroom
+	want := 0.64 - 42.0/168.0
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacing score %.6f (long-only), got %.6f", want, got)
+		t.Errorf("expected headroom %.6f (long-only), got %.6f", want, got)
 	}
 }
 
-func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_Bottleneck(t *testing.T) {
-	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
-	primaryRem := int64(100)
-
-	// 账号定义了 4 个窗口：5h, 24h, 7d (weekly), 30d (monthly)
-	// Window 1: 5h 窗口, 剩余 80%, 4h 后重置 -> score = 0.80 / (4/5) = 1.00
-	// Window 2: 24h 窗口, 剩余 50%, 12h 后重置 -> score = 0.50 / (12/24) = 1.00
-	// Window 3: 7d 窗口, 剩余 20%, 84h 后重置 -> score = 0.20 / (84/168) = 0.40 (最紧张瓶颈窗口)
-	// Window 4: 30d 窗口, 剩余 90%, 15d 后重置 -> score = 0.90 / (15/30) = 1.80
-	windows := []core.QuotaWindow{
-		{Name: "5h", Duration: 5 * time.Hour, Remaining: 80, ResetAt: now.Add(4 * time.Hour)},
-		{Name: "24h", Duration: 24 * time.Hour, Remaining: 50, ResetAt: now.Add(12 * time.Hour)},
-		{Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 20, ResetAt: now.Add(84 * time.Hour)},
-		{Name: "monthly", Duration: 30 * 24 * time.Hour, Remaining: 90, ResetAt: now.Add(15 * 24 * time.Hour)},
-	}
-
-	credentials := []core.Credential{
-		{Name: "codex-4-windows", AuthIndex: "auth-4-windows", Provider: core.ProviderCodex, Type: core.CredentialTypeCodex},
-	}
-	evidence := []ProbeEvidence{
-		{
-			Provider:      core.ProviderCodex,
-			AuthIndex:     "auth-4-windows",
-			ObservedAt:    now,
-			Remaining:     &primaryRem,
-			Windows:       windows,
-			Freshness:     core.FreshnessFresh,
-			ProbeStatus:   core.ProbeStatusReady,
-			Status:        EvidenceStatusReady,
-			PlanType:      core.PlanTypePro,
-			EvidenceFresh: true,
-		},
-	}
-
-	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
-	if len(plan.Items) != 1 {
-		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
-	}
-
-	got := plan.Items[0].PacingScore
-	want := 0.20 / (84.0 / 168.0) // 0.40 (weekly is bottleneck)
-	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacing score %.6f (weekly window bottleneck), got %.6f", want, got)
-	}
-}
-
-func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_AnyWindowDepletedIsZero(t *testing.T) {
+func TestPlanFreshOnly_Headroom_MultiQuotaWindows_AnyWindowDepletedIsZero(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 	primaryRem := int64(100)
 
@@ -837,12 +792,12 @@ func TestPlanFreshOnly_PacingScore_MultiQuotaWindows_AnyWindowDepletedIsZero(t *
 	if len(plan.Items) != 1 {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
-	if got := plan.Items[0].PacingScore; got != 0 {
-		t.Errorf("expected pacing score 0 when any window is depleted, got %.6f", got)
+	if got := plan.Items[0].RemainingHeadroom; got != 0 {
+		t.Errorf("expected headroom 0 when any window is depleted, got %.6f", got)
 	}
 }
 
-func TestPlanFreshOnly_CachedEvidencePopulatesPacingScoreAndZeroChanges(t *testing.T) {
+func TestPlanFreshOnly_CachedEvidencePopulatesRemainingHeadroomAndZeroChanges(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 	shortReset := now.Add(4 * time.Hour)
 	longReset := now.Add(5 * 24 * time.Hour)
@@ -900,8 +855,10 @@ func TestPlanFreshOnly_CachedEvidencePopulatesPacingScoreAndZeroChanges(t *testi
 	if item.PlanType != core.PlanTypePlus {
 		t.Errorf("expected PlanType plus, got %s", item.PlanType)
 	}
-	if item.PacingScore <= 0 {
-		t.Errorf("expected PacingScore > 0, got %.6f", item.PacingScore)
+	// short 窗口 headroom=0.8-4/5=0（恰好卡在配速目标上），long 窗口 headroom=0.9-120/168≈0.186，
+	// 瓶颈取二者最小值 -> 0。
+	if item.RemainingHeadroom != 0 {
+		t.Errorf("expected RemainingHeadroom 0 (bottleneck short window sits exactly at pace target), got %.6f", item.RemainingHeadroom)
 	}
 	if item.Priority != 42 {
 		t.Errorf("expected Priority preserved at 42, got %d", item.Priority)
@@ -993,18 +950,19 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 	if cachedItem.Priority != 50 {
 		t.Errorf("expected cached item to keep priority 50, got %d", cachedItem.Priority)
 	}
-	if cachedItem.PacingScore <= 0 {
-		t.Errorf("expected cached item to have valid PacingScore > 0, got %.6f", cachedItem.PacingScore)
+	// legacy 单窗口回退（3h <= 6h -> 5h 基准）：headroom = 0.70 - 3/5 = 0.10。
+	wantCachedHeadroom := 0.70 - 3.0/5.0
+	if diff := cachedItem.RemainingHeadroom - wantCachedHeadroom; diff > 1e-6 || diff < -1e-6 {
+		t.Errorf("expected cached item RemainingHeadroom %.6f, got %.6f", wantCachedHeadroom, cachedItem.RemainingHeadroom)
 	}
 }
 
 // --- Codex banked reset-credit "即将过期" pacing boost ---
 // 用户需求：Codex 若存在一条 available 状态的银行化重置额度（可手动兑换的一次性重置），
 // 且其 expiresAt 落在未来 14 天内（即将作废），应更激进地消耗额度而非保守 pacing，避免
-// 额度白白过期浪费。最终确认的实现：只作用于驱动 weight 的 remainingHeadroom（不再作用于
-// pacingScore，因为 pacingScore 已经不再驱动 priority/tier 归属），在正常算出的 headroom
-// 基础上直接 +1.0、不做任何上限 clamp——不封顶是为了让这类账号的 weight 能明显超过普通
-// 满额账号的上限（1000），调度器才会真的倾斜更多流量过去。详见 planner.go 中
+// 额度白白过期浪费。最终确认的实现：只作用于驱动 weight 的 remainingHeadroom，在正常算出的
+// headroom 基础上直接 +1.0、不做任何上限 clamp——不封顶是为了让这类账号的 weight 能明显超过
+// 普通满额账号的上限（1000），调度器才会真的倾斜更多流量过去。详见 planner.go 中
 // codexResetCreditBoostActive/remainingHeadroom 的注释说明。
 
 func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.Duration) PlanItem {
@@ -1165,27 +1123,9 @@ func TestRemainingHeadroom_CodexResetCreditBoost_BoundaryJustOver14Days(t *testi
 	}
 }
 
-// TestPacingScore_NotAffectedByCodexResetCreditBoost 锁定这次拍板的范围收窄：pacingScore
-// 已经不再驱动 priority/tier 归属（只用于陈旧凭证 tie-break 与审计展示），Codex reset-credit
-// 提升只作用于 remainingHeadroom/weight 这一条链路，不应该再影响 pacingScore 的取值。
-func TestPacingScore_NotAffectedByCodexResetCreditBoost(t *testing.T) {
-	now := time.Time{}
-	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := pacingScore(item, now)
-
-	expiresAt := now.Add(5 * 24 * time.Hour) // 落在 14 天窗口内，会让 remainingHeadroom 被提升
-	item.AvailableResetCredits = 1
-	item.NearestResetCreditExpiresAt = &expiresAt
-
-	got := pacingScore(item, now)
-	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected pacingScore unaffected by reset-credit boost, baseline=%.6f got=%.6f", baseline, got)
-	}
-}
-
 // TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence 验证 AvailableResetCredits/
-// NearestResetCreditExpiresAt 能从 ProbeEvidence 正确贯穿到 PlanItem，PacingScore 保持不受
-// 提升影响，而 Weight（经由 remainingHeadroom）确实反映了提升后的 headroom。
+// NearestResetCreditExpiresAt 能从 ProbeEvidence 正确贯穿到 PlanItem，且 Weight（经由
+// remainingHeadroom）确实反映了提升后的 headroom。
 func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 	rem := int64(30)
@@ -1222,11 +1162,6 @@ func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T
 	}
 	if item.NearestResetCreditExpiresAt == nil || !item.NearestResetCreditExpiresAt.Equal(expiresAt) {
 		t.Errorf("expected NearestResetCreditExpiresAt threaded through, got %v", item.NearestResetCreditExpiresAt)
-	}
-	// PacingScore 不受提升影响：0.30/(84/168)=0.6。
-	wantScore := 0.30 / (84.0 / 168.0)
-	if diff := item.PacingScore - wantScore; diff > 1e-6 || diff < -1e-6 {
-		t.Errorf("expected unboosted PacingScore %.6f, got %.6f", wantScore, item.PacingScore)
 	}
 	// Weight 反映提升后的 headroom：unboosted headroom=0.30-0.5=-0.2->floor 0，+1.0=1.0，
 	// weight=weightFromHeadroom(1.0)=1000（跟一个普通满额账号打平，因为这个用例底层 headroom

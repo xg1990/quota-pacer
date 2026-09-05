@@ -34,7 +34,7 @@ type SnapshotItem struct {
 	Target        Target `json:"target"`
 	EvidenceFresh bool   `json:"evidence_fresh"`
 	Reason        string `json:"reason"`
-	// PlanType/Remaining/ResetAt/LongWindowResetAt/PacingScore 是 pace 计算表格所需的原始输入与结果，
+	// PlanType/Remaining/ResetAt/LongWindowResetAt/RemainingHeadroom 是 pace 计算表格所需的原始输入与结果，
 	// 均为非敏感数值/枚举/时间字段，无需脱敏。
 	PlanType             string             `json:"plan_type"`
 	Remaining            *int64             `json:"remaining"`
@@ -44,7 +44,7 @@ type SnapshotItem struct {
 	ShortWindowResetAt   *time.Time         `json:"short_window_reset_at"`
 	LongWindowRemaining  *int64             `json:"long_window_remaining"`
 	Windows              []core.QuotaWindow `json:"windows,omitempty"`
-	PacingScore          float64            `json:"pacing_score"`
+	RemainingHeadroom    float64            `json:"remaining_headroom"`
 	// AvailableResetCredits/NearestResetCreditExpiresAt：仅 Codex，供 pace 计算表格展示
 	// "即将过期额度加速消耗"提升是否命中，非敏感数值/时间字段，无需脱敏。
 	AvailableResetCredits       int        `json:"available_reset_credits,omitempty"`
@@ -143,7 +143,7 @@ func snapshotItem(item priority.PlanItem) SnapshotItem {
 		ShortWindowResetAt:          item.ShortWindowResetAt,
 		LongWindowRemaining:         item.LongWindowRemaining,
 		Windows:                     item.Windows,
-		PacingScore:                 item.PacingScore,
+		RemainingHeadroom:           item.RemainingHeadroom,
 		AvailableResetCredits:       item.AvailableResetCredits,
 		NearestResetCreditExpiresAt: item.NearestResetCreditExpiresAt,
 	}
