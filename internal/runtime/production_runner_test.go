@@ -130,7 +130,7 @@ func TestPreserveProbeFailureStateLeavesTrustedQuotaChange(t *testing.T) {
 // probePolicyForProvider 算出的真实 TTL/ResetStaleAfter 传给 NeedsProbe，而不是空值 ProbePolicy{}。
 // 空值会让 isTTLExpired 恒为 false，退化为只看 NextProbeAt——而成功/失败探测都会把
 // NextProbeAt 设为 1 小时后，导致自动路径上的凭证探测一次后进入 1 小时黑窗期，
-// evidence 永远无法在 15 分钟 TTL 内刷新为 fresh（历史上曾导致 PacingScore 恒为 0）。
+// evidence 永远无法在 15 分钟 TTL 内刷新为 fresh（历史上曾导致 RemainingHeadroom 恒为 0）。
 func TestDueProbesAppliesProviderPolicyTTL(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)

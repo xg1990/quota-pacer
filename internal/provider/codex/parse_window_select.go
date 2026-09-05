@@ -38,7 +38,7 @@ func pickPaidWindow(usage whamUsage, observedAt time.Time) (effectiveWindow, boo
 	fiveHour, hasFiveHour := pickWindow(usage, observedAt, isFiveHourWindow)
 	weekly, hasWeekly := pickWindow(usage, observedAt, isWeeklyWindow)
 	// fiveHour + weekly 同时存在：与 Claude/Antigravity 宏观额度口径对齐，以 weekly 为主窗口，
-	// 并完整填充 Windows 切片供 PacingScore 多窗口取 min 瓶颈。
+	// 并完整填充 Windows 切片供 RemainingHeadroom 多窗口取 min 瓶颈。
 	if hasFiveHour && hasWeekly {
 		windowsList := []core.QuotaWindow{
 			{Name: "5h", Duration: 5 * time.Hour, Remaining: fiveHour.remaining, ResetAt: *fiveHour.resetAt},
