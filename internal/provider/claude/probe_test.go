@@ -299,7 +299,7 @@ func TestProber_Probe_MessagesMicroProbeSuccess(t *testing.T) {
 						"anthropic-ratelimit-unified-7d-status":      []string{"allowed"},
 						"anthropic-ratelimit-unified-7d-utilization": []string{"0.49"},
 						"anthropic-ratelimit-unified-7d-reset":       []string{"1787767200"},
-						"anthropic-ratelimit-unified-status":        []string{"allowed"},
+						"anthropic-ratelimit-unified-status":         []string{"allowed"},
 						"anthropic-organization-id":                  []string{"org-micro-probe-123"},
 					},
 					Body: []byte(`{"id":"msg_123","type":"message","role":"assistant","content":[{"type":"text","text":"hi"}]}`),
@@ -331,4 +331,55 @@ func TestProber_Probe_MessagesMicroProbeSuccess(t *testing.T) {
 	if result.Window != WindowWeekly {
 		t.Errorf("expected WindowWeekly, got %v", result.Window)
 	}
+}
+
+// TestProbeHeaders_SyncsCurrentClaudeCodeFingerprint covers the fingerprint
+// sync fix: probeHeaders must emit the current genuine Claude Code CLI
+// identity (User-Agent claude-cli/2.1.258, the CLI/Stainless identity
+// headers, and the exact Anthropic-Beta CLIProxyAPI computes for a 1-token
+// probe body) rather than the stale claude-code/0.2.29 fingerprint, and must
+// pick the OAuth vs API-key beta variant based on the access token shape.
+func TestProbeHeaders_SyncsCurrentClaudeCodeFingerprint(t *testing.T) {
+	t.Run("oauth token", func(t *testing.T) {
+		headers := probeHeaders(ProbeRequest{AccessToken: "sk-ant-oat01-abc123"})
+
+		if got := headers["User-Agent"]; len(got) != 1 || got[0] != "claude-cli/2.1.258 (external, cli)" {
+			t.Errorf("User-Agent = %v, want claude-cli/2.1.258 (external, cli)", got)
+		}
+		if got := headers["Anthropic-Beta"]; len(got) != 1 || got[0] != claudeProbeBetaOAuth {
+			t.Errorf("Anthropic-Beta = %v, want %s", got, claudeProbeBetaOAuth)
+		}
+		if !strings.Contains(claudeProbeBetaOAuth, "oauth-2025-04-20") {
+			t.Error("OAuth beta list must include oauth-2025-04-20")
+		}
+		for name, want := range map[string]string{
+			"X-App":                   "cli",
+			"X-Stainless-Retry-Count": "0",
+			"X-Stainless-Runtime":     "node",
+			"X-Stainless-Lang":        "js",
+			"X-Stainless-Timeout":     "600",
+			"Anthropic-Dangerous-Direct-Browser-Access": "true",
+		} {
+			if got := headers[name]; len(got) != 1 || got[0] != want {
+				t.Errorf("%s = %v, want [%s]", name, got, want)
+			}
+		}
+	})
+
+	t.Run("api key token", func(t *testing.T) {
+		headers := probeHeaders(ProbeRequest{AccessToken: "sk-ant-api03-abc123"})
+
+		if got := headers["Anthropic-Beta"]; len(got) != 1 || got[0] != claudeProbeBetaAPIKey {
+			t.Errorf("Anthropic-Beta = %v, want %s", got, claudeProbeBetaAPIKey)
+		}
+		if strings.Contains(claudeProbeBetaAPIKey, "oauth-2025-04-20") {
+			t.Error("API-key beta list must not include the OAuth-only beta")
+		}
+		if strings.Contains(claudeProbeBetaAPIKey, "fallback-credit-2026-06-01") {
+			t.Error("API-key beta list must not include the OAuth-only fallback-credit beta")
+		}
+		if got := headers["X-Api-Key"]; len(got) != 1 || got[0] != "sk-ant-api03-abc123" {
+			t.Errorf("X-Api-Key = %v, want the api key forwarded", got)
+		}
+	})
 }
