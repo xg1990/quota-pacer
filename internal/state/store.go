@@ -19,7 +19,10 @@ import (
 // 否则旧版本写入的缓存条目会被 NeedsProbe/ValidEntry 误判为“完整有效”而继续回放，
 // 导致 pacingScore 在缺失字段下静默退化为 legacy 单窗口口径。
 // v3→v4（Codex 银行化重置额度 AvailableResetCredits/NearestResetCreditExpiresAt 加入打分链路）。
-const SchemaVersion = 4
+// v4→v5（新增 LastActiveProbeAt，将“主动 probe 节流时钟”与“最新观测时间 ObservedAt”拆开，
+// 修复被动流量（SourcePassiveUsage）刷新 ObservedAt 从而无限期饿死主动 probe 的问题——
+// 详见 isTTLExpired 与 MarkProbeSuccess 的注释）。
+const SchemaVersion = 5
 
 // ErrCorruptCache 表示缓存文件不是可解析的状态文档。
 var ErrCorruptCache = errors.New("state: corrupt cache")
@@ -43,13 +46,17 @@ type Entry struct {
 	ModelGroup    string        `json:"model_group,omitempty"`
 	AuthIndex     string        `json:"auth_index"`
 	ObservedAt    time.Time     `json:"observed_at"`
-	ResetAt       time.Time     `json:"reset_at"`
-	Remaining     int           `json:"remaining"`
-	Source        Source        `json:"source"`
-	LastError     string        `json:"last_error"`
-	NextProbeAt   time.Time     `json:"next_probe_at"`
-	AuthInvalid   bool          `json:"auth_invalid,omitempty"`
-	PlanType      core.PlanType `json:"plan_type,omitempty"`
+	// LastActiveProbeAt 是"上一次主动 probe（成功或失败）"的时间，专用于 NeedsProbe 的
+	// TTL 节流判断；与 ObservedAt（最新一次观测——含被动流量）分开维护，避免被动观测
+	// 无限期饿死主动 probe（被动来源不会推进此字段，见 MarkProbeSuccess）。
+	LastActiveProbeAt time.Time     `json:"last_active_probe_at,omitempty"`
+	ResetAt           time.Time     `json:"reset_at"`
+	Remaining         int           `json:"remaining"`
+	Source            Source        `json:"source"`
+	LastError         string        `json:"last_error"`
+	NextProbeAt       time.Time     `json:"next_probe_at"`
+	AuthInvalid       bool          `json:"auth_invalid,omitempty"`
+	PlanType          core.PlanType `json:"plan_type,omitempty"`
 	// xAI free 策略扩展字段（旁路 store，兼容旧缓存缺省）。
 	PlanClass       string      `json:"plan_class,omitempty"`        // free | paid
 	QuotaFailCount  int         `json:"quota_fail_count,omitempty"`  // 连续额度类失败次数
@@ -239,6 +246,15 @@ func (s *Store) MarkProbeSuccess(ctx context.Context, success ProbeSuccess) erro
 		AvailableResetCredits:       success.AvailableResetCredits,
 		NearestResetCreditExpiresAt: utcOrZero(success.NearestResetCreditExpiresAt),
 	}
+	// 被动观测（SourcePassiveUsage）只刷新 ObservedAt/Remaining/Windows 等展示字段，
+	// 不推进主动 probe 节流时钟：否则高频真实流量会让 isTTLExpired 永远判定"未过期"，
+	// 主动 probe 被无限期饿死，fresh-only 的优先级计算就永远拿不到本轮证据
+	// （症状：全部凭证长期 reason=keep current state / evidence_fresh=false）。
+	if success.Source == SourcePassiveUsage {
+		entry.LastActiveProbeAt = prev.LastActiveProbeAt
+	} else {
+		entry.LastActiveProbeAt = entry.ObservedAt
+	}
 	if success.PreserveLongWindow && entry.LongWindowResetAt.IsZero() {
 		entry.LongWindowResetAt = prev.LongWindowResetAt
 		if entry.LongWindowRemaining == nil {
@@ -368,6 +384,7 @@ func (s *Store) MarkProbeFailure(ctx context.Context, failure ProbeFailure) erro
 	entry.ModelGroup = entryModelGroup(failure.ModelGroup)
 	entry.AuthIndex = authIndexKey(failure.AuthIndex)
 	entry.ObservedAt = failure.ObservedAt.UTC()
+	entry.LastActiveProbeAt = failure.ObservedAt.UTC()
 	entry.LastError = sanitizeProbeError(failure.Err)
 	entry.NextProbeAt = failure.NextProbeAt.UTC()
 	s.entries[key] = entry
@@ -485,7 +502,27 @@ func entryModelGroup(modelGroup string) string {
 }
 
 func isTTLExpired(entry Entry, check ProbeCheck) bool {
-	return !entry.ObservedAt.IsZero() && check.Policy.TTL > 0 && !check.Now.Before(entry.ObservedAt.Add(check.Policy.TTL))
+	if check.Policy.TTL <= 0 {
+		return false
+	}
+	// LastActiveProbeAt 为零值意味着这个条目从未真正被主动 probe 过。区分两种情况：
+	//   1) 条目已经有过观测（ObservedAt 非零，说明至少写入过一次被动观测）但从未主动
+	//      probe 过——典型场景是刚从 v4 迁移上来、又恰好被一次被动写入抢先命中
+	//      （被动写入会把 SchemaVersion 一并刷新到最新版本，导致 SchemaVersion 不匹配
+	//      这道迁移保险不再触发）。这种条目必须视为"已过期"强制其排到主动 probe
+	//      队列，否则等同于放任被动流量（持续刷新 NextProbeAt/ObservedAt）无限期
+	//      饿死它——与本次修复要消除的问题完全同构。
+	//   2) 条目只写过 MarkProbeScheduled 占位（ObservedAt 也是零值，从未有过任何
+	//      观测），这是分批/错峰调度的正常中间态，不应被这里抢跑打断，否则会把大
+	//      机队的错峰探测计划挤成一次性探测风暴（NextProbeAt 的分批语义交由后续
+	//      检查处理）。
+	if entry.LastActiveProbeAt.IsZero() {
+		return !entry.ObservedAt.IsZero()
+	}
+	// 用 LastActiveProbeAt（而非 ObservedAt）判断 TTL：ObservedAt 会被被动流量
+	// （SourcePassiveUsage）持续刷新，若仍以它为准，高频真实流量会让本判断永远
+	// 返回 false，导致主动 probe 永远不会被触发。
+	return !check.Now.Before(entry.LastActiveProbeAt.Add(check.Policy.TTL))
 }
 
 func isResetReached(entry Entry, now time.Time) bool {
@@ -494,6 +531,12 @@ func isResetReached(entry Entry, now time.Time) bool {
 
 func isResetTooOld(entry Entry, check ProbeCheck) bool {
 	return !entry.ResetAt.IsZero() && check.Policy.ResetStaleAfter > 0 && check.Now.Sub(entry.ResetAt) > check.Policy.ResetStaleAfter
+}
+
+// SanitizeProbeError 是 sanitizeProbeError 的导出包装，供 runtime 包在写日志时复用
+// 同一套脱敏规则，避免日志与落盘缓存的脱敏口径不一致而意外泄露凭证相关信息。
+func SanitizeProbeError(err error) string {
+	return sanitizeProbeError(err)
 }
 
 func sanitizeProbeError(err error) string {

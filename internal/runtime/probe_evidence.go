@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -334,7 +335,9 @@ func xaiAuthMaterialLooksExpired(ctx context.Context, client *host.Client, authI
 
 func recordCodexProbeResult(ctx context.Context, store *state.Store, result codex.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {
 	if result.Status != codex.StatusReady || result.ResetAt == nil || result.Remaining == nil {
-		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
+		failErr := errors.New(result.Error)
+		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: failErr, NextProbeAt: now.Add(time.Hour)})
+		log.Printf("quota-pacer: probe failed provider=%s auth_index=%s status=%s reason=%s", result.Provider, result.AuthIndex, result.Status, state.SanitizeProbeError(failErr))
 		return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
 	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
@@ -359,7 +362,9 @@ func recordCodexProbeResult(ctx context.Context, store *state.Store, result code
 
 func recordAntigravityProbeResult(ctx context.Context, store *state.Store, result antigravity.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {
 	if result.Status != antigravity.StatusReady || result.ResetAt == nil || result.Remaining == nil {
-		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: core.ProviderAntigravity, ModelGroup: string(result.ModelGroup), ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
+		failErr := errors.New(result.Error)
+		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: core.ProviderAntigravity, ModelGroup: string(result.ModelGroup), ObservedAt: now, Err: failErr, NextProbeAt: now.Add(time.Hour)})
+		log.Printf("quota-pacer: probe failed provider=antigravity auth_index=%s model_group=%s status=%s reason=%s", result.AuthIndex, result.ModelGroup, result.Status, state.SanitizeProbeError(failErr))
 		return priority.ProbeEvidence{Provider: core.ProviderAntigravity, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
 	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{
@@ -383,7 +388,9 @@ func recordAntigravityProbeResult(ctx context.Context, store *state.Store, resul
 
 func recordClaudeProbeResult(ctx context.Context, store *state.Store, result claude.ProbeResult, now time.Time) (priority.ProbeEvidence, error) {
 	if result.Status != claude.StatusReady || result.ResetAt == nil || result.Remaining == nil {
-		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: errors.New(result.Error), NextProbeAt: now.Add(time.Hour)})
+		failErr := errors.New(result.Error)
+		err := store.MarkProbeFailure(ctx, state.ProbeFailure{AuthIndex: result.AuthIndex, Provider: result.Provider, ObservedAt: now, Err: failErr, NextProbeAt: now.Add(time.Hour)})
+		log.Printf("quota-pacer: probe failed provider=%s auth_index=%s status=%s reason=%s", result.Provider, result.AuthIndex, result.Status, state.SanitizeProbeError(failErr))
 		return priority.ProbeEvidence{Provider: result.Provider, AuthIndex: result.AuthIndex, Freshness: result.Freshness, ProbeStatus: result.ProbeStatus, Status: priority.EvidenceStatusProbeFailed}, err
 	}
 	err := store.MarkProbeSuccess(ctx, state.ProbeSuccess{

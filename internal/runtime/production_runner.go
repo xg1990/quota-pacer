@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"slices"
 	"strings"
@@ -84,6 +85,7 @@ func (r *Runtime) runProductionTask(ctx context.Context, request TaskRequest) er
 	}
 	providerEntries := runHistoryProvidersFromResult(result)
 	summary := fmt.Sprintf("apply credentials=%d succeeded=%d failed=%d skipped=%d", result.Attempted+result.Skipped, result.Succeeded, result.Failed, result.Skipped)
+	log.Printf("quota-pacer: trigger=%s %s", request.Trigger, summary)
 	r.snapshotRunEntry(result, summary, RunHistoryEntry{
 		Kind:      "apply",
 		Trigger:   string(request.Trigger),
@@ -208,6 +210,11 @@ func (r *Runtime) runAutoParallelProviders(ctx context.Context, request TaskRequ
 	if len(parts) == 0 {
 		summary = fmt.Sprintf("auto_apply credentials=%d attempted=%d succeeded=%d failed=%d skipped=%d", len(allCredentials), result.Attempted, result.Succeeded, result.Failed, result.Skipped)
 	}
+	if firstErr != nil {
+		log.Printf("quota-pacer: auto_apply %s (first_err=%v)", summary, firstErr)
+	} else {
+		log.Printf("quota-pacer: auto_apply %s", summary)
+	}
 
 	// 先写 history，再 SaveAtomic：避免 SaveAtomic/ctx 失败导致「无记录却算跑过」。
 	r.snapshotRunEntry(result, summary, RunHistoryEntry{
@@ -321,6 +328,9 @@ func (r *Runtime) collectEvidenceForTrigger(ctx context.Context, input collectIn
 		}
 		evidence = current
 		if !hasProbeFailure(current) || attempt == autoQuotaProbeAttempts {
+			if hasProbeFailure(current) {
+				log.Printf("quota-pacer: auto_apply probe retries exhausted after %d attempts, some credentials still failing", attempt)
+			}
 			return evidence, nil
 		}
 		input.forceProbe = true
