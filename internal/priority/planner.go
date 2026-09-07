@@ -239,8 +239,10 @@ const weightScaleReference = 1000
 const weightFloor = 1
 
 // weightFromHeadroom maps a tier member's remaining-pace headroom (see
-// remainingHeadroom, already floored to [0,1]) to an integer CPA weight,
-// linearly proportional to weightScaleReference, floored at weightFloor.
+// remainingHeadroom) to an integer CPA weight. Normal headroom is in [0,1];
+// an expiring Codex reset credit may intentionally boost it above 1.0.
+// The result is linearly proportional to weightScaleReference and floored at
+// weightFloor.
 // headroom=1.0 (full remaining-pace headroom) -> weightScaleReference;
 // headroom=0 (already burned past pace target, no headroom left) still maps
 // to weightFloor rather than 0, so it keeps a minimal share of traffic
@@ -258,7 +260,7 @@ func weightFromHeadroom(headroom float64) int {
 // replacing the old strictly-unique-descending-priority ranking. Relative
 // health is now expressed entirely through Weight (weightFromHeadroom, driven
 // by remainingHeadroom — "距离配速目标用量，还可以多用掉多少百分比" — not by
-// how the pacing score ranks against the tier's other members), which CPA's
+// relative remaining headroom within the tier), which CPA's
 // weighted-round-robin scheduler uses to proportionally split concurrent
 // traffic among same-priority credentials — see ensureUniquePriorities for
 // why this intentional sharing does not get "corrected" back into unique

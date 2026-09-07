@@ -6,13 +6,13 @@
 
 </div>
 
-CLIProxyAPI (CPA) 额度节奏（Pacing）跨提供商自动平衡插件，前身为 credential-priority。插件 ID、动态库基础名与 CPA 配置键均为 `quota-pacer`。
+CLIProxyAPI (CPA) 额度节奏（Pacing）跨提供商自动平衡插件，前身为 credential-priority。它根据本轮最新额度证据和配速富余度（`remaining_headroom`）平衡凭证流量。插件 ID、动态库基础名与 CPA 配置键均为 `quota-pacer`。
 
 ## 导航
 
 - [功能概览](#功能概览)
 - [工作流程](#工作流程)
-- [PacingScore 算法](#pacingscore-算法)
+- [配速富余度](#配速富余度)
 - [构建与安装](#构建与安装)
 - [插件商店来源](#插件商店来源)
 - [配置说明](#配置说明)
@@ -25,7 +25,7 @@ CLIProxyAPI (CPA) 额度节奏（Pacing）跨提供商自动平衡插件，前�
 - 通过宿主回调 `host.auth.list`、`host.auth.get`、`host.auth.get_runtime`、`host.auth.save` 复用 CPA 的凭证、代理和写入链路。
 - 只对本轮最新且可用的探测证据生成排序变更，避免用过期缓存调整凭证状态。
 - 当前支持 Antigravity、Codex、Claude 与 xAI 凭证在统一的全局优先级下协同调度。
-- **纯粹的 PacingScore 算法**：移除所有提供商特判与复杂耗尽分支。正额度账号根据 PacingScore 自动排序；额度耗尽（`Remaining <= 0`）自然得分为 0 并分配优先级 `0`；OAuth 失效（401）标记硬禁用。
+- **基于配速富余度的调度**：`remaining_headroom` 直接驱动每个账号的调度权重，允许超过 `1.0`；额度耗尽（`Remaining <= 0`）分配优先级 `0`；OAuth 失效（401）标记硬禁用。
 - 状态页、诊断、快照与日志只输出脱敏后的凭证信息。
 - **配置管理**：通过 CPA **插件管理可视化配置字段**（`ConfigFields`）编辑，或直接修改 `config.yaml` / `plugins.configs.quota-pacer`。
 - **插件页**支持 Management Key 验证、概览（只读生效配置）、执行记录（近 5 次）、帮助，以及手动触发排序。
@@ -41,9 +41,9 @@ CLIProxyAPI (CPA) 额度节奏（Pacing）跨提供商自动平衡插件，前�
        - Codex：探测可用性与剩余额度
        - Claude：按会话/5 小时重置窗口探测可用性与配额
        - xAI：通过业务用量及 OAuth 状态探测额度与重置窗口
-  -> 根据最新探测额度与剩余时间计算每个账号的 PacingScore
+  -> 根据本轮最新探测证据计算每个账号的 `remaining_headroom`
   -> 基于本轮 fresh 证据生成规划结果：
-       - 正额度账号：按 PacingScore 降序从 MaxPriority（如 100）向下分配全局唯一优先级
+       - 正额度账号：由 `remaining_headroom` 驱动调度权重
        - 额度耗尽账号（Remaining <= 0）：Priority = 0, Reason = "fresh remaining depleted"
        - 凭据失效（401）：Priority = -1, Disabled = true, Reason = "xai auth invalid"
   -> 根据运行模式决定是否写回：
@@ -52,22 +52,17 @@ CLIProxyAPI (CPA) 额度节奏（Pacing）跨提供商自动平衡插件，前�
   -> 在管理页面展示脱敏后的统计、审计摘要与 Pacing 计算详情
 ```
 
-## PacingScore 算法
+## 配速富余度
 
-排序不再依赖固定阈值或提供商规则，核心是一个无量纲的节奏健康度评分，用于在所有提供商、所有账号之间做统一的全局比较：
+每个账号的调度权重由本轮最新额度证据计算出的 `remaining_headroom` 驱动；它已取代废弃的 PacingScore 指标。
+
+对每个已知额度窗口，配速富余度为：
 
 ```
-PacingScore = 剩余额度百分比 ÷ 剩余时间百分比
+max(剩余额度百分比 - 剩余时间百分比, 0)
 ```
 
-- **剩余额度百分比**：本轮探测得到的 `Remaining`（0-100）。探测失败或额度为 0 时得分直接为 `0`，账号自动沉底（`Priority = 0`）。
-- **剩余时间百分比**：距离配额重置的剩余时间 ÷ 所属周期总长度，裁剪到 `[0.001, 1.0]`。周期总长度判定：
-  - 探测到长周期重置时间（如 OAuth 周长窗 `LongWindowResetAt`）时固定为 7 天（168h）；
-  - 否则按短周期重置时间（`ResetAt`）距今的剩余时长动态归类：`> 48 小时`按 7 天算，`6-48 小时`按 24 小时算，`< 6 小时`按 5 小时算（对应 Claude / Codex 常见的会话级窗口）；
-  - 完全没有重置时间证据时，退化为只用剩余额度百分比排序。
-- **满额优先**：本轮 `Remaining >= 100` 时，直接按最高档位（`Remaining / 0.001`）计分，跳过剩余时间比例的计算。部分账号在额度周期 reset 后真实计费窗口要等首次消费时才开始计时；优先分配它们能让周期尽快启动。
-
-得分越高，说明该账号"额度消耗进度落后于时间流逝进度"（用得比预期慢），应优先分配流量去消耗；得分 < 1 则说明消耗过快，应压低优先级。
+多窗口账号取富余度最低的窗口作为瓶颈。`0` 表示该账号已没有配速富余，但只要仍有额度，就会保留最小的正调度权重。Codex 的银行化重置额度若即将过期，会在 `remaining_headroom` 上有意且不封顶地加 `1.0`；因此数值可以超过 `1.0`，以便在额度过期前分配更多流量。
 
 ## 构建与安装
 
@@ -162,7 +157,7 @@ plugins:
 - `GET /v0/management/plugins/quota-pacer/diagnostics`
   导出脱敏诊断信息与历史记录。
 - `GET /v0/management/plugins/quota-pacer/snapshot/latest`
-  获取最近一次运行的脱敏决策快照与 PacingScore 计算表。
+  获取最近一次运行的脱敏决策快照，以及 `remaining_headroom`、调度权重和重置额度详情。
 
 ## 致谢
 
