@@ -56,13 +56,20 @@ Load plugin
 
 Each credential's scheduling weight is driven by `remaining_headroom`, computed from fresh quota evidence for the current run. It replaces the retired PacingScore metric.
 
-For each known quota window, remaining headroom is the pace surplus:
+For each known quota window, raw headroom is the pace surplus:
 
 ```
-max(remaining quota % - remaining time %, 0)
+raw headroom = remaining quota % - remaining time %
 ```
 
-Multi-window credentials use their lowest headroom window as the bottleneck. A value of `0` means the credential has no surplus left under the pace target; it still receives the minimum positive scheduling weight while quota remains. `remaining_headroom` may exceed `1.0` when a Codex banked reset credit is expiring soon: its `+1.0` boost is intentional and uncapped, so it receives proportionally more traffic before the credit expires.
+Multi-window credentials use their lowest raw-headroom window as the bottleneck; raw values may be negative and remain visible for pacing diagnostics. Among fresh credentials with actual positive remaining quota, the planner applies one shared global translation:
+
+```
+uplift = max(0, -min(raw headroom of eligible credentials))
+normalized headroom = raw headroom + uplift
+```
+
+`normalized headroom` drives the proportional scheduling weight. Accounts with zero remaining quota receive weight `0` and are excluded from the uplift baseline, so normalization cannot revive them. An expiring Codex banked reset credit adds `1.0` only to the final weight calculation (uncapped); it never changes raw headroom, the global uplift, or normalized headroom.
 
 ## Build and Installation
 

@@ -86,10 +86,10 @@ func TestPlanFreshOnly_Claude_PositiveRemaining(t *testing.T) {
 	if item2.Priority != 100 {
 		t.Errorf("expected item2 priority 100 (shared fresh-positive tier), got %d", item2.Priority)
 	}
-	if want := weightFromHeadroom(remainingHeadroom(*item1, now)); item1.Weight != want {
+	if want := weightFromHeadroom(weightHeadroom(*item1, now)); item1.Weight != want {
 		t.Errorf("expected item1 weight %d, got %d", want, item1.Weight)
 	}
-	if want := weightFromHeadroom(remainingHeadroom(*item2, now)); item2.Weight != want {
+	if want := weightFromHeadroom(weightHeadroom(*item2, now)); item2.Weight != want {
 		t.Errorf("expected item2 weight %d, got %d", want, item2.Weight)
 	}
 	if item1.Weight <= item2.Weight {
@@ -226,7 +226,7 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
+		if want := weightFromHeadroom(weightHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -321,7 +321,7 @@ func TestPlanFreshOnly_CrossProvider_HeadroomWeighting(t *testing.T) {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
+		if want := weightFromHeadroom(weightHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -419,7 +419,7 @@ func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
+		if want := weightFromHeadroom(weightHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -546,7 +546,7 @@ func TestPlanFreshOnly_Headroom_FullRemainingWins(t *testing.T) {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
+		if want := weightFromHeadroom(weightHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -622,7 +622,7 @@ func TestPlanFreshOnly_Headroom_FreeVersusPaid(t *testing.T) {
 		if item.Priority != 100 {
 			t.Errorf("expected shared tier priority 100 for %s, got %d", item.Credential.Name, item.Priority)
 		}
-		if want := weightFromHeadroom(remainingHeadroom(item, now)); item.Weight != want {
+		if want := weightFromHeadroom(weightHeadroom(item, now)); item.Weight != want {
 			t.Errorf("expected weight %d for %s, got %d", want, item.Credential.Name, item.Weight)
 		}
 	}
@@ -933,7 +933,7 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 	if freshItem == nil {
 		t.Fatalf("fresh item not found in items")
 	}
-	if want := weightFromHeadroom(remainingHeadroom(*freshItem, now)); plan.Changes[0].Weight != want {
+	if want := weightFromHeadroom(weightHeadroom(*freshItem, now)); plan.Changes[0].Weight != want {
 		t.Errorf("expected sole tier member weight %d, got %d", want, plan.Changes[0].Weight)
 	}
 
@@ -977,13 +977,13 @@ func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.D
 func TestRemainingHeadroom_CodexResetCreditBoost_ExpiringWithin14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := remainingHeadroom(item, now) // 0.30-0.5=-0.2 -> floor 0
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now) // 0.30-0.5=-0.2 -> floor 0
 
 	expiresAt := now.Add(5 * 24 * time.Hour) // 5 天后过期，落在 14 天窗口内
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	boosted := remainingHeadroom(item, now)
+	boosted := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	want := baseline + 1.0
 	if diff := boosted - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted headroom %.6f (baseline %.6f + 1.0), got %.6f", want, baseline, boosted)
@@ -995,7 +995,7 @@ func TestRemainingHeadroom_CodexResetCreditBoost_ExceedsFullWhenUnderlyingHeadro
 	// 而不是被压回 1.0——否则这个即将浪费额度的账号跟普通满额账号（headroom=1.0）就没区别了。
 	now := time.Time{}
 	item := codexItemWithWindow(80, 10*time.Hour, 168*time.Hour) // ratio=0.8, timeRatio=10/168≈0.0595, headroom≈0.7405
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if baseline <= 0 {
 		t.Fatalf("expected positive unboosted headroom as test precondition, got %.6f", baseline)
 	}
@@ -1004,7 +1004,7 @@ func TestRemainingHeadroom_CodexResetCreditBoost_ExceedsFullWhenUnderlyingHeadro
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	boosted := remainingHeadroom(item, now)
+	boosted := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	want := baseline + 1.0
 	if diff := boosted - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted headroom %.6f (baseline %.6f + 1.0, not clamped), got %.6f", want, baseline, boosted)
@@ -1017,13 +1017,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_ExceedsFullWhenUnderlyingHeadro
 func TestRemainingHeadroom_CodexResetCreditBoost_ExpiringBeyond14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(20 * 24 * time.Hour) // 20 天后过期，超出 14 天窗口
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected unboosted headroom %.6f (beyond 14d window), got %.6f", baseline, got)
 	}
@@ -1032,13 +1032,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_ExpiringBeyond14Days(t *testing
 func TestRemainingHeadroom_CodexResetCreditBoost_NoAvailableCredit(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(5 * 24 * time.Hour)
 	item.AvailableResetCredits = 0 // 无可用额度
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected unboosted headroom %.6f when AvailableResetCredits=0, got %.6f", baseline, got)
 	}
@@ -1052,13 +1052,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_NonCodexProviderUnaffected(t *t
 		Remaining:  &rem,
 		Windows:    []core.QuotaWindow{{Name: "weekly", Duration: 168 * time.Hour, Remaining: 30, ResetAt: now.Add(84 * time.Hour)}},
 	}
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(5 * 24 * time.Hour)
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected non-Codex provider unaffected by reset-credit boost, baseline=%.6f got=%.6f", baseline, got)
 	}
@@ -1071,7 +1071,7 @@ func TestRemainingHeadroom_CodexResetCreditBoost_DepletedRemainingStaysZero(t *t
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	if got := remainingHeadroom(item, now); got != 0 {
+	if got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now); got != 0 {
 		t.Errorf("expected headroom 0 for depleted primary remaining even with imminent-expiry credit, got %.6f", got)
 	}
 }
@@ -1080,13 +1080,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_AlreadyExpiredCreditNotBoosted(
 	now := time.Time{}.Add(30 * 24 * time.Hour)
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
 	item.Windows[0].ResetAt = now.Add(84 * time.Hour)
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(-time.Hour) // 已过期
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected unboosted headroom %.6f for already-expired credit, got %.6f", baseline, got)
 	}
@@ -1095,13 +1095,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_AlreadyExpiredCreditNotBoosted(
 func TestRemainingHeadroom_CodexResetCreditBoost_BoundaryExactly14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(14 * 24 * time.Hour) // 精确 14 天：应触发提升
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	want := baseline + 1.0
 	if diff := got - want; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected boosted headroom %.6f at exactly-14-day boundary, got %.6f", want, got)
@@ -1111,13 +1111,13 @@ func TestRemainingHeadroom_CodexResetCreditBoost_BoundaryExactly14Days(t *testin
 func TestRemainingHeadroom_CodexResetCreditBoost_BoundaryJustOver14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := remainingHeadroom(item, now)
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 
 	expiresAt := now.Add(14*24*time.Hour + time.Minute) // 超出 14 天一分钟：不应触发
 	item.AvailableResetCredits = 1
 	item.NearestResetCreditExpiresAt = &expiresAt
 
-	got := remainingHeadroom(item, now)
+	got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now)
 	if diff := got - baseline; diff > 1e-6 || diff < -1e-6 {
 		t.Errorf("expected unboosted headroom %.6f just beyond 14-day boundary, got %.6f", baseline, got)
 	}
@@ -1329,7 +1329,7 @@ func TestRemainingHeadroom_FullRemainingSpecialCase(t *testing.T) {
 		Remaining:  &rem,
 		ResetAt:    &resetAt,
 	}
-	if got := remainingHeadroom(item, now); got != 1.0 {
+	if got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now); got != 1.0 {
 		t.Errorf("expected full remaining (未激活周期) to short-circuit to headroom 1.0, got %.6f", got)
 	}
 }
@@ -1343,15 +1343,14 @@ func TestRemainingHeadroom_StaleResetAtAlreadyPassed(t *testing.T) {
 		Remaining:  &rem,
 		ResetAt:    &resetAt,
 	}
-	if got := remainingHeadroom(item, now); got != 1.0 {
+	if got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now); got != 1.0 {
 		t.Errorf("expected stale already-passed resetAt to short-circuit to headroom 1.0, got %.6f", got)
 	}
 }
 
-func TestRemainingHeadroom_OverPaceFloorsToZero(t *testing.T) {
+func TestRawRemainingHeadroom_OverPaceIsNegative(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
-	// 5% 剩余，但只过了 10% 的窗口时间——远落后于配速目标，headroom 应 floor 到 0（不是负数）。
-	resetAt := now.Add(90 * time.Hour) // 10% 时间流逝对应 100h 窗口中的 10h 已过，还剩 90h
+	resetAt := now.Add(90 * time.Hour)
 	rem := int64(5)
 	item := PlanItem{
 		Credential: core.Credential{Provider: core.ProviderClaude},
@@ -1359,8 +1358,8 @@ func TestRemainingHeadroom_OverPaceFloorsToZero(t *testing.T) {
 		ResetAt:    &resetAt,
 		Windows:    []core.QuotaWindow{{Name: "custom", Duration: 100 * time.Hour, Remaining: 5, ResetAt: resetAt}},
 	}
-	if got := remainingHeadroom(item, now); got != 0 {
-		t.Errorf("expected over-pace account to floor headroom at 0, got %.6f", got)
+	if got, want := rawRemainingHeadroom(item, now), -0.85; got != want {
+		t.Errorf("expected raw over-pace headroom %.2f, got %.6f", want, got)
 	}
 }
 
@@ -1378,50 +1377,97 @@ func TestRemainingHeadroom_MultiWindowBottleneckIsMinHeadroom(t *testing.T) {
 		},
 	}
 	// 瓶颈窗口应取 headroom 更小的那个（5h 窗口，headroom=0），而不是 30d 窗口的 0.3。
-	if got := remainingHeadroom(item, now); got != 0 {
+	if got := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now); got != 0 {
 		t.Errorf("expected bottleneck window (min headroom) to dominate, got %.6f", got)
 	}
 }
 
-// TestPlanFreshOnly_HeadroomTableCases locks the management table semantics behind
-// the 2026-09-07 report: nonzero quota can legitimately have no pace surplus,
-// while an expiring Codex reset credit can push the displayed value to 2.000.
-func TestPlanFreshOnly_HeadroomTableCases(t *testing.T) {
-	now := time.Date(2026, 9, 7, 14, 4, 0, 0, time.UTC)
-	claudeRemaining, agLowRemaining, agMidRemaining, xaiRemaining, codexRemaining := int64(49), int64(31), int64(52), int64(1), int64(100)
-	xaiResetAt := now.Add(3 * time.Hour)
-	codexCreditExpiresAt := now.Add(5 * 24 * time.Hour)
+func absFloat(value float64) float64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
 
-	credentials := []core.Credential{
-		{AuthIndex: "claude", Provider: core.ProviderClaude},
-		{AuthIndex: "ag-low", Provider: core.ProviderAntigravity},
-		{AuthIndex: "ag-mid", Provider: core.ProviderAntigravity},
-		{AuthIndex: "xai", Provider: core.ProviderXAI},
-		{AuthIndex: "codex", Provider: core.ProviderCodex},
+func TestPlanFreshOnly_GlobalHeadroomUplift(t *testing.T) {
+	now := time.Time{}
+	resetAt := now.Add(90 * time.Hour)
+	window := func(remaining int64) []core.QuotaWindow {
+		return []core.QuotaWindow{{Name: "test", Duration: 100 * time.Hour, Remaining: remaining, ResetAt: resetAt}}
 	}
-	evidence := []ProbeEvidence{
-		{Provider: core.ProviderClaude, AuthIndex: "claude", ObservedAt: now, Remaining: &claudeRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 55, ResetAt: now.Add(3 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 49, ResetAt: now.Add(3 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
-		{Provider: core.ProviderAntigravity, AuthIndex: "ag-low", ObservedAt: now, Remaining: &agLowRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 100, ResetAt: now.Add(5 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 31, ResetAt: now.Add(4 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
-		{Provider: core.ProviderAntigravity, AuthIndex: "ag-mid", ObservedAt: now, Remaining: &agMidRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 98, ResetAt: now.Add(3 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 52, ResetAt: now.Add(4 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
-		{Provider: core.ProviderXAI, AuthIndex: "xai", ObservedAt: now, Remaining: &xaiRemaining, ResetAt: &xaiResetAt, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true, QuotaKnown: true},
-		{Provider: core.ProviderCodex, AuthIndex: "codex", ObservedAt: now, Remaining: &codexRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 100, ResetAt: now.Add(5 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 100, ResetAt: now.Add(7 * 24 * time.Hour)}}, AvailableResetCredits: 1, NearestResetCreditExpiresAt: &codexCreditExpiresAt, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
-	}
-
-	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
-	byAuthIndex := make(map[string]PlanItem, len(plan.Items))
-	for _, item := range plan.Items {
-		byAuthIndex[item.Credential.AuthIndex] = item
-	}
-	for _, authIndex := range []string{"claude", "ag-low", "ag-mid", "xai"} {
-		item := byAuthIndex[authIndex]
-		if item.RemainingHeadroom != 0 || item.Weight != weightFloor {
-			t.Errorf("%s: expected zero displayed headroom and floor weight %d, got headroom %.3f weight %d", authIndex, weightFloor, item.RemainingHeadroom, item.Weight)
+	plan := func(values map[string]int64, creditFor string) Plan {
+		credentials := make([]core.Credential, 0, len(values))
+		evidence := make([]ProbeEvidence, 0, len(values))
+		for authIndex, remaining := range values {
+			rem := remaining
+			provider := core.ProviderClaude
+			if authIndex == creditFor {
+				provider = core.ProviderCodex
+			}
+			e := ProbeEvidence{Provider: provider, AuthIndex: authIndex, Remaining: &rem, Windows: window(remaining), Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true}
+			if authIndex == creditFor {
+				expiresAt := now.Add(24 * time.Hour)
+				e.AvailableResetCredits = 1
+				e.NearestResetCreditExpiresAt = &expiresAt
+			}
+			credentials = append(credentials, core.Credential{AuthIndex: authIndex, Provider: provider})
+			evidence = append(evidence, e)
 		}
+		return PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
 	}
-	codex := byAuthIndex["codex"]
-	if codex.RemainingHeadroom != 2.0 || codex.Weight != 2*weightScaleReference {
-		t.Errorf("codex: expected 2.000 headroom and weight %d from full quota plus reset-credit boost, got headroom %.3f weight %d", 2*weightScaleReference, codex.RemainingHeadroom, codex.Weight)
+	byAuth := func(plan Plan) map[string]PlanItem {
+		result := make(map[string]PlanItem, len(plan.Items))
+		for _, item := range plan.Items {
+			result[item.Credential.AuthIndex] = item
+		}
+		return result
 	}
+
+	t.Run("all negative raw values receive one shared uplift", func(t *testing.T) {
+		items := byAuth(plan(map[string]int64{"low": 10, "less-low": 40}, ""))
+		if got := items["low"]; got.RawHeadroom != -0.8 || got.HeadroomUplift != 0.8 || got.NormalizedHeadroom != 0 || got.Weight != weightFloor {
+			t.Errorf("low: raw/uplift/normalized/weight = %.3f/%.3f/%.3f/%d", got.RawHeadroom, got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+		if got := items["less-low"]; absFloat(got.RawHeadroom+0.5) > 1e-9 || absFloat(got.HeadroomUplift-0.8) > 1e-9 || absFloat(got.NormalizedHeadroom-0.3) > 1e-9 || got.Weight != 300 {
+			t.Errorf("less-low: raw/uplift/normalized/weight = %.3f/%.3f/%.3f/%d", got.RawHeadroom, got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+	})
+	t.Run("mixed raw values also receive uplift", func(t *testing.T) {
+		items := byAuth(plan(map[string]int64{"negative": 20, "positive": 95}, ""))
+		if got := items["negative"]; got.HeadroomUplift != 0.7 || got.NormalizedHeadroom != 0 || got.Weight != weightFloor {
+			t.Errorf("negative: uplift/normalized/weight = %.3f/%.3f/%d", got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+		if got := items["positive"]; absFloat(got.HeadroomUplift-0.7) > 1e-9 || absFloat(got.NormalizedHeadroom-0.75) > 1e-9 || got.Weight != 750 {
+			t.Errorf("positive: uplift/normalized/weight = %.3f/%.3f/%d", got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+	})
+	t.Run("all positive raw values leave uplift at zero", func(t *testing.T) {
+		resetAt = now.Add(10 * time.Hour)
+		items := byAuth(plan(map[string]int64{"small": 20, "large": 60}, ""))
+		if got := items["small"]; got.HeadroomUplift != 0 || got.NormalizedHeadroom != 0.1 || got.Weight != 100 {
+			t.Errorf("small: uplift/normalized/weight = %.3f/%.3f/%d", got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+		if got := items["large"]; got.HeadroomUplift != 0 || got.NormalizedHeadroom != 0.5 || got.Weight != 500 {
+			t.Errorf("large: uplift/normalized/weight = %.3f/%.3f/%d", got.HeadroomUplift, got.NormalizedHeadroom, got.Weight)
+		}
+	})
+	t.Run("depleted account cannot be revived", func(t *testing.T) {
+		resetAt = now.Add(90 * time.Hour)
+		items := byAuth(plan(map[string]int64{"eligible": 10, "depleted": 0}, ""))
+		if got := items["depleted"]; got.Weight != 0 || got.HeadroomUplift != 0 || got.NormalizedHeadroom != 0 || got.Priority != 0 {
+			t.Errorf("depleted account was revived: %+v", got)
+		}
+		if got := items["eligible"]; got.HeadroomUplift != 0.8 {
+			t.Errorf("depleted account must not affect eligible uplift: got %.3f", got.HeadroomUplift)
+		}
+	})
+	t.Run("Codex credit boosts only final weight", func(t *testing.T) {
+		items := byAuth(plan(map[string]int64{"baseline": 10, "codex": 20}, "codex"))
+		codex := items["codex"]
+		if absFloat(codex.RawHeadroom+0.7) > 1e-9 || absFloat(codex.HeadroomUplift-0.8) > 1e-9 || absFloat(codex.NormalizedHeadroom-0.1) > 1e-9 || codex.Weight != 1100 {
+			t.Errorf("codex raw/uplift/normalized/weight = %.3f/%.3f/%.3f/%d", codex.RawHeadroom, codex.HeadroomUplift, codex.NormalizedHeadroom, codex.Weight)
+		}
+	})
 }
 
 // --- ensureUniquePriorities：区分"设计内共享 tier priority"与"真正意外冲突" ---
