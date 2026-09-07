@@ -962,10 +962,10 @@ func TestPlanFreshOnly_MixedFreshAndCached(t *testing.T) {
 // --- Codex banked reset-credit "即将过期" pacing boost ---
 // 用户需求：Codex 若存在一条 available 状态的银行化重置额度（可手动兑换的一次性重置），
 // 且其 expiresAt 落在未来 14 天内（即将作废），应更激进地消耗额度而非保守 pacing，避免
-// 额度白白过期浪费。最终确认的实现：只作用于驱动 weight 的 remainingHeadroom，在正常算出的
-// headroom 基础上直接 +1.0、不做任何上限 clamp——不封顶是为了让这类账号的 weight 能明显超过
+// 额度白白过期浪费。最终确认的实现：只作用于驱动 weight 的 weightHeadroom（applyResetCreditBoost），
+// 在正常算出的 headroom 基础上直接 +1.0、不做任何上限 clamp——不封顶是为了让这类账号的 weight 能明显超过
 // 普通满额账号的上限（1000），调度器才会真的倾斜更多流量过去。详见 planner.go 中
-// codexResetCreditBoostActive/remainingHeadroom 的注释说明。
+// codexResetCreditBoostActive/applyResetCreditBoost 的注释说明。
 
 func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.Duration) PlanItem {
 	rem := remaining
@@ -979,7 +979,7 @@ func codexItemWithWindow(remaining int64, resetIn time.Duration, duration time.D
 func TestRemainingHeadroom_CodexResetCreditBoost_ExpiringWithin14Days(t *testing.T) {
 	now := time.Time{}
 	item := codexItemWithWindow(30, 84*time.Hour, 168*time.Hour)
-	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now) // 0.30-0.5=-0.2 -> floor 0
+	baseline := applyResetCreditBoost(item, rawRemainingHeadroom(item, now), now) // raw: 0.30-0.5=-0.2（不封底）
 
 	expiresAt := now.Add(5 * 24 * time.Hour) // 5 天后过期，落在 14 天窗口内
 	item.AvailableResetCredits = 1
@@ -1127,7 +1127,7 @@ func TestRemainingHeadroom_CodexResetCreditBoost_BoundaryJustOver14Days(t *testi
 
 // TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence 验证 AvailableResetCredits/
 // NearestResetCreditExpiresAt 能从 ProbeEvidence 正确贯穿到 PlanItem，且 Weight（经由
-// remainingHeadroom）确实反映了提升后的 headroom。
+// weightHeadroom/applyResetCreditBoost）确实反映了提升后的 headroom。
 func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 	rem := int64(30)
@@ -1165,8 +1165,9 @@ func TestPlanFreshOnly_CodexResetCreditBoost_ThreadsThroughEvidence(t *testing.T
 	if item.NearestResetCreditExpiresAt == nil || !item.NearestResetCreditExpiresAt.Equal(expiresAt) {
 		t.Errorf("expected NearestResetCreditExpiresAt threaded through, got %v", item.NearestResetCreditExpiresAt)
 	}
-	// Weight 反映提升后的 headroom：unboosted headroom=0.30-0.5=-0.2->floor 0，+1.0=1.0，
-	// weight=weightFromHeadroom(1.0)=1000（跟一个普通满额账号打平，因为这个用例底层 headroom
+	// Weight 反映提升后的 headroom：raw=0.30-0.5=-0.2（唯一一个 fresh-positive 账号，不封底），
+	// 全局 uplift=max(0,0.2)=0.2，normalized=0，Codex 提升 +1.0=1.0，
+	// weight=weightFromHeadroom(1.0)=1000（跟一个普通满额账号打平，因为这个用例 normalized headroom
 	// 本身已经是 0；"能超过 1000"的场景见 TestPlanFreshOnly_CodexResetCreditBoost_WeightExceedsNormalCap）。
 	if item.Weight != weightScaleReference {
 		t.Errorf("expected Weight %d (boosted headroom reaches exactly full), got %d", weightScaleReference, item.Weight)
@@ -1213,9 +1214,9 @@ func TestPlanFreshOnly_CodexResetCreditBoost_WeightExceedsNormalCap(t *testing.T
 }
 
 // TestPlanFreshOnly_OverPaceAccountStillGetsFloorWeightInSharedTier 覆盖用户明确要求的场景：
-// 共享 tier 内一个已经落后于配速目标（remainingHeadroom floor 到 0）的账号，仍必须以
-// weight=weightFloor（1，不是 0）出现在最终 Plan 里，并进入 Changes（不能被跳过/排除），
-// 才能继续参与 CPA WeightedRoundRobinSelector 的轮转。
+// 共享 tier 内一个已经落后于配速目标（normalized headroom 低到 weightFromHeadroom 会将其
+// weight 封到 weightFloor）的账号，仍必须以 weight=weightFloor（1，不是 0）出现在最终 Plan
+// 里，并进入 Changes（不能被跳过/排除），才能继续参与 CPA WeightedRoundRobinSelector 的轮转。
 func TestPlanFreshOnly_OverPaceAccountStillGetsFloorWeightInSharedTier(t *testing.T) {
 	now := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
 
@@ -1292,7 +1293,7 @@ func TestPlanFreshOnly_OverPaceAccountStillGetsFloorWeightInSharedTier(t *testin
 	}
 }
 
-// --- weightFromHeadroom / remainingHeadroom ---
+// --- weightFromHeadroom / rawRemainingHeadroom / populateHeadrooms ---
 
 func TestWeightFromHeadroom_FullHeadroomGetsFullWeight(t *testing.T) {
 	if got := weightFromHeadroom(1.0); got != weightScaleReference {
