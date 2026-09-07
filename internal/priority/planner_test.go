@@ -236,18 +236,18 @@ func TestPlanFreshOnly_MultiProvider(t *testing.T) {
 	}
 }
 
-func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
+func TestPlanFreshOnly_CrossProvider_HeadroomWeighting(t *testing.T) {
 	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
 
-	// Claude: reset in 43h (~1.79d), 51% remaining -> Pacing score = 0.51 / (43/168) = 1.99
+	// Claude: 51% remaining, 43h left in a 7d window -> headroom ≈ 0.254.
 	resetClaude := now.Add(43 * time.Hour)
 	remClaude := int64(51)
 
-	// Codex: reset in 120h (5d), 80% remaining -> Pacing score = 0.80 / (120/168) = 1.12
+	// Codex: 80% remaining, 120h left in a 7d window -> headroom ≈ 0.086.
 	resetCodex := now.Add(120 * time.Hour)
 	remCodex := int64(80)
 
-	// Antigravity: reset in 140h (5.83d), 65% remaining -> Pacing score = 0.65 / (140/168) = 0.78
+	// Antigravity: 65% remaining, 140h left in a 7d window -> no headroom.
 	resetAG := now.Add(140 * time.Hour)
 	remAG := int64(65)
 
@@ -339,14 +339,14 @@ func TestPlanFreshOnly_CrossProvider_PacingRanking(t *testing.T) {
 
 func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 	now := time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)
-	// Account 1: reset in 2 days (48h), 80% remaining -> score = 0.80 / (48/168) = 2.80
+	// Account 1: 80% remaining with 48h left in a 7d window -> headroom ≈ 0.514.
 	reset2Days := now.Add(48 * time.Hour)
 	rem80 := int64(80)
 
-	// Account 2: reset in 4 days (96h), 80% remaining -> score = 0.80 / (96/168) = 1.40
+	// Account 2: 80% remaining with 96h left in a 7d window -> headroom ≈ 0.229.
 	reset4Days := now.Add(96 * time.Hour)
 
-	// Account 3: reset in 2 days (48h), 10% remaining -> score = 0.10 / (48/168) = 0.35
+	// Account 3: 10% remaining with 48h left in a 7d window -> no headroom.
 	rem10 := int64(10)
 
 	credentials := []core.Credential{
@@ -358,7 +358,7 @@ func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 	evidence := []ProbeEvidence{
 		{
 			Provider:          core.ProviderClaude,
-			AuthIndex:         "auth-fast", // reset in 2d, 10% remaining (score 0.35)
+			AuthIndex:         "auth-fast", // 10% remaining with 48h left: no headroom
 			ObservedAt:        now,
 			ResetAt:           &reset2Days,
 			LongWindowResetAt: &reset2Days,
@@ -371,7 +371,7 @@ func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 		},
 		{
 			Provider:          core.ProviderClaude,
-			AuthIndex:         "auth-mid", // reset in 4d, 80% remaining (score 1.40)
+			AuthIndex:         "auth-mid", // 80% remaining with 96h left: headroom ≈ 0.229
 			ObservedAt:        now,
 			ResetAt:           &reset4Days,
 			LongWindowResetAt: &reset4Days,
@@ -384,7 +384,7 @@ func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 		},
 		{
 			Provider:          core.ProviderClaude,
-			AuthIndex:         "auth-slow", // reset in 2d, 80% remaining (score 2.80) -> should rank #1
+			AuthIndex:         "auth-slow", // 80% remaining with 48h left: headroom ≈ 0.514, highest weight
 			ObservedAt:        now,
 			ResetAt:           &reset2Days,
 			LongWindowResetAt: &reset2Days,
@@ -1380,6 +1380,47 @@ func TestRemainingHeadroom_MultiWindowBottleneckIsMinHeadroom(t *testing.T) {
 	// 瓶颈窗口应取 headroom 更小的那个（5h 窗口，headroom=0），而不是 30d 窗口的 0.3。
 	if got := remainingHeadroom(item, now); got != 0 {
 		t.Errorf("expected bottleneck window (min headroom) to dominate, got %.6f", got)
+	}
+}
+
+// TestPlanFreshOnly_HeadroomTableCases locks the management table semantics behind
+// the 2026-09-07 report: nonzero quota can legitimately have no pace surplus,
+// while an expiring Codex reset credit can push the displayed value to 2.000.
+func TestPlanFreshOnly_HeadroomTableCases(t *testing.T) {
+	now := time.Date(2026, 9, 7, 14, 4, 0, 0, time.UTC)
+	claudeRemaining, agLowRemaining, agMidRemaining, xaiRemaining, codexRemaining := int64(49), int64(31), int64(52), int64(1), int64(100)
+	xaiResetAt := now.Add(3 * time.Hour)
+	codexCreditExpiresAt := now.Add(5 * 24 * time.Hour)
+
+	credentials := []core.Credential{
+		{AuthIndex: "claude", Provider: core.ProviderClaude},
+		{AuthIndex: "ag-low", Provider: core.ProviderAntigravity},
+		{AuthIndex: "ag-mid", Provider: core.ProviderAntigravity},
+		{AuthIndex: "xai", Provider: core.ProviderXAI},
+		{AuthIndex: "codex", Provider: core.ProviderCodex},
+	}
+	evidence := []ProbeEvidence{
+		{Provider: core.ProviderClaude, AuthIndex: "claude", ObservedAt: now, Remaining: &claudeRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 55, ResetAt: now.Add(3 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 49, ResetAt: now.Add(3 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
+		{Provider: core.ProviderAntigravity, AuthIndex: "ag-low", ObservedAt: now, Remaining: &agLowRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 100, ResetAt: now.Add(5 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 31, ResetAt: now.Add(4 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
+		{Provider: core.ProviderAntigravity, AuthIndex: "ag-mid", ObservedAt: now, Remaining: &agMidRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 98, ResetAt: now.Add(3 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 52, ResetAt: now.Add(4 * 24 * time.Hour)}}, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
+		{Provider: core.ProviderXAI, AuthIndex: "xai", ObservedAt: now, Remaining: &xaiRemaining, ResetAt: &xaiResetAt, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true, QuotaKnown: true},
+		{Provider: core.ProviderCodex, AuthIndex: "codex", ObservedAt: now, Remaining: &codexRemaining, Windows: []core.QuotaWindow{{Name: "5h", Duration: 5 * time.Hour, Remaining: 100, ResetAt: now.Add(5 * time.Hour)}, {Name: "weekly", Duration: 7 * 24 * time.Hour, Remaining: 100, ResetAt: now.Add(7 * 24 * time.Hour)}}, AvailableResetCredits: 1, NearestResetCreditExpiresAt: &codexCreditExpiresAt, Freshness: core.FreshnessFresh, ProbeStatus: core.ProbeStatusReady, Status: EvidenceStatusReady, EvidenceFresh: true},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	byAuthIndex := make(map[string]PlanItem, len(plan.Items))
+	for _, item := range plan.Items {
+		byAuthIndex[item.Credential.AuthIndex] = item
+	}
+	for _, authIndex := range []string{"claude", "ag-low", "ag-mid", "xai"} {
+		item := byAuthIndex[authIndex]
+		if item.RemainingHeadroom != 0 || item.Weight != weightFloor {
+			t.Errorf("%s: expected zero displayed headroom and floor weight %d, got headroom %.3f weight %d", authIndex, weightFloor, item.RemainingHeadroom, item.Weight)
+		}
+	}
+	codex := byAuthIndex["codex"]
+	if codex.RemainingHeadroom != 2.0 || codex.Weight != 2*weightScaleReference {
+		t.Errorf("codex: expected 2.000 headroom and weight %d from full quota plus reset-credit boost, got headroom %.3f weight %d", 2*weightScaleReference, codex.RemainingHeadroom, codex.Weight)
 	}
 }
 

@@ -6,13 +6,13 @@
 
 </div>
 
-Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that automatically paces and balances credential priority across all AI providers based on fresh quota evidence and consumption rate (PacingScore). The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
+Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that automatically paces and balances credential traffic across all AI providers from fresh quota evidence and remaining pace headroom (`remaining_headroom`). The plugin ID, dynamic library basename, and CPA configuration key are all `quota-pacer`.
 
 ## Navigation
 
 - [Overview](#overview)
 - [Workflow](#workflow)
-- [PacingScore Algorithm](#pacingscore-algorithm)
+- [Remaining Headroom](#remaining-headroom)
 - [Build and Installation](#build-and-installation)
 - [Plugin Store Source](#plugin-store-source)
 - [Configuration](#configuration)
@@ -25,7 +25,7 @@ Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that au
 - Reuses CPA credential, proxy, and write-back flows through `host.auth.list`, `host.auth.get`, `host.auth.get_runtime`, and `host.auth.save`.
 - Generates priority changes only from fresh and ready evidence collected in the current probe run.
 - Currently supports Antigravity, Codex, Claude, and xAI credentials on a unified global priority scale.
-- **Pure PacingScore sorting**: no complex provider-specific rules or manual depletion branches—accounts with positive quota are dynamically ordered by PacingScore; depleted accounts (`Remaining <= 0`) naturally receive a score of 0 and Priority `0`; invalid OAuth credentials (401) are disabled.
+- **Headroom-based pacing**: `remaining_headroom` directly drives each credential’s scheduling weight, and values above `1.0` are valid. Depleted accounts (`Remaining <= 0`) receive Priority `0`; invalid OAuth credentials (401) are disabled.
 - Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
 - **Configuration** is managed via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.quota-pacer`.
 - **Plugin management page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual sorting triggers.
@@ -41,9 +41,9 @@ Load plugin
        - Codex: probe availability and remaining quota
        - Claude: probe availability and remaining quota by session / 5-hour reset window
        - xAI: probe quota and reset window via business usage and OAuth status
-  -> Calculate PacingScore for each credential based on probed quota and remaining time
+  -> Compute `remaining_headroom` for each credential from probed quota evidence
   -> Build a sorting plan only from fresh and ready evidence in this run:
-       - Positive remaining quota: sorted descending by PacingScore from MaxPriority (e.g. 100) down
+       - Positive remaining quota: use `remaining_headroom` to drive scheduling weight
        - Depleted quota (Remaining <= 0): Priority = 0, Reason = "fresh remaining depleted"
        - Auth invalid (401): Priority = -1, Disabled = true, Reason = "xai auth invalid"
   -> Decide whether to write back by run mode:
@@ -52,22 +52,17 @@ Load plugin
   -> Show redacted statistics, audit summary, and sorting result on the management page
 ```
 
-## PacingScore Algorithm
+## Remaining Headroom
 
-Sorting does not rely on fixed thresholds or provider-specific heuristics. All credentials compete on one unified, dimensionless pacing health score:
+Each credential's scheduling weight is driven by `remaining_headroom`, computed from fresh quota evidence for the current run. It replaces the retired PacingScore metric.
+
+For each known quota window, remaining headroom is the pace surplus:
 
 ```
-PacingScore = Remaining Quota % ÷ Remaining Time %
+max(remaining quota % - remaining time %, 0)
 ```
 
-- **Remaining Quota %**: the `Remaining` value (0-100) probed in this run. A failed probe or zero remaining quota yields a score of `0`, sinking the account to the bottom (`Priority = 0`).
-- **Remaining Time %**: time left until quota reset ÷ the inferred window length, clamped to `[0.001, 1.0]`. The window length is inferred as follows:
-  - If a long-window reset time is probed (e.g., OAuth weekly window `LongWindowResetAt`), the window is fixed at 7 days (168h).
-  - Otherwise it falls back to the short-window reset time (`ResetAt`) and infers the window from the remaining duration: `> 48h` → 7-day window, `6-48h` → 24-hour window, `< 6h` → 5-hour window (matching Claude / Codex session windows).
-  - With no reset time available, it falls back to comparing remaining quota % directly.
-- **Full-quota override**: if `Remaining >= 100` in the current run, the account scores at the maximum ceiling (`Remaining / 0.001`), activating freshly reset cycles immediately.
-
-A higher score indicates that an account's quota consumption is lagging behind time elapsed (used slower than expected), granting it higher priority to consume before the window resets.
+Multi-window credentials use their lowest headroom window as the bottleneck. A value of `0` means the credential has no surplus left under the pace target; it still receives the minimum positive scheduling weight while quota remains. `remaining_headroom` may exceed `1.0` when a Codex banked reset credit is expiring soon: its `+1.0` boost is intentional and uncapped, so it receives proportionally more traffic before the credit expires.
 
 ## Build and Installation
 
@@ -160,7 +155,7 @@ The plugin registers **resources** (static web UI) and **routes** (dynamic APIs)
 - `GET /v0/management/plugins/quota-pacer/diagnostics`
   Exports redacted diagnostics and recent run history.
 - `GET /v0/management/plugins/quota-pacer/snapshot/latest`
-  Returns the latest redacted decision snapshot with PacingScore details.
+  Returns the latest redacted decision snapshot with `remaining_headroom`, scheduling-weight, and reset-credit details.
 
 ## Acknowledgments
 
