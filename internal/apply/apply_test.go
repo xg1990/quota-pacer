@@ -114,7 +114,7 @@ func TestApply_Success(t *testing.T) {
 }
 
 // TestApply_OverPaceAccountStillPatchesFloorWeight 覆盖用户明确要求的场景：一个已经落后于配速
-// 目标（remainingHeadroom floor 到 0，weight floor 到 1）的共享 tier 成员，priority/disabled
+// 目标（normalized headroom 低到 weight floor 到 1）的共享 tier 成员，priority/disabled
 // 均无变化，仍必须触发 PatchWeight(weight=1) 写回，而不能因为"没有其它字段变化"被整体跳过——
 // weight=1 不是 0，CPA WeightedRoundRobinSelector 的 positiveWeightAuths 过滤器只排除
 // weight<=0 的凭证，weight=1 必须继续参与轮转。
