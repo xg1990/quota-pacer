@@ -237,20 +237,18 @@ const weightScaleReference = 1000
 // weight<=0 from the rotation entirely (its positiveWeightAuths filter) —
 // weight 0 is not "a tiny trickle of traffic", it is "none at all". Flooring
 // at 1 guarantees every currently-healthy credential in the shared tier
-// keeps at least a minimal share — including one that has already burned
-// past its pace target (remainingHeadroom floors to 0 for it) — so it is
-// never fully starved out of the rotation.
+// keeps at least a minimal share — including the credential at the normalized
+// zero baseline — so it is never fully starved out of the rotation.
 const weightFloor = 1
 
-// weightFromHeadroom maps a tier member's remaining-pace headroom (see
-// remainingHeadroom) to an integer CPA weight. Normal headroom is in [0,1];
-// an expiring Codex reset credit may intentionally boost it above 1.0.
-// The result is linearly proportional to weightScaleReference and floored at
-// weightFloor.
-// headroom=1.0 (full remaining-pace headroom) -> weightScaleReference;
-// headroom=0 (already burned past pace target, no headroom left) still maps
-// to weightFloor rather than 0, so it keeps a minimal share of traffic
-// instead of being excluded from CPA's weighted rotation entirely.
+// weightFromHeadroom maps a tier member's normalized scheduling headroom to an
+// integer CPA weight. The shared uplift guarantees this value is non-negative;
+// an expiring Codex reset credit may intentionally boost the final weight input
+// above 1.0. The result is linearly proportional to weightScaleReference and
+// floored at weightFloor.
+// normalized headroom=1.0 -> weightScaleReference;
+// normalized headroom=0 still maps to weightFloor rather than 0, so it keeps a
+// minimal share of traffic instead of being excluded from CPA's weighted rotation entirely.
 func weightFromHeadroom(headroom float64) int {
 	weight := int(math.Round(weightScaleReference * headroom))
 	if weight < weightFloor {
@@ -619,8 +617,9 @@ func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	return legacyRemainingHeadroom(item, now)
 }
 
-// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径。不含提升逻辑——
-// 由 remainingHeadroom 统一在最终结果上叠加。
+// legacyRemainingHeadroom is the single-window heuristic fallback when newer
+// fields are absent (for example xAI). It produces only raw diagnostics; global
+// uplift and reset-credit policy are applied later in the scheduling pipeline.
 func legacyRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	remaining := *item.Remaining
 	if remaining >= 100 {
