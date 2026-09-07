@@ -9,7 +9,12 @@ func TestStatusHTML_HeadroomTableShowsWeightAndResetCredit(t *testing.T) {
 	for _, want := range []string{
 		`data-i18n="colSchedulingWeight"`,
 		`data-i18n="colResetCredit"`,
-		`remaining_headroom`,
+		`data-i18n="colRawHeadroom"`,
+		`data-i18n="colGlobalUplift"`,
+		`data-i18n="colNormalizedHeadroom"`,
+		`raw_headroom`,
+		`headroom_uplift`,
+		`normalized_headroom`,
 		`function targetWeight(item)`,
 		`function resetCreditInfo(item)`,
 		`const priorityDiff=`,

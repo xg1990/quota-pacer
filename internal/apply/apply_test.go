@@ -39,6 +39,22 @@ func (mockAuditor) RecordEvent(ctx context.Context, event AuditEvent) error {
 	return nil
 }
 
+func TestSnapshotIncludesHeadroomTransform(t *testing.T) {
+	plan := priority.Plan{Items: []priority.PlanItem{{
+		Credential:         core.Credential{AuthIndex: "auth-1"},
+		RawHeadroom:        -0.7,
+		HeadroomUplift:     0.8,
+		NormalizedHeadroom: 0.1,
+		RemainingHeadroom:  0.1,
+		Weight:             1100,
+	}}}
+
+	item := Snapshot(plan).Items[0]
+	if item.RawHeadroom != -0.7 || item.HeadroomUplift != 0.8 || item.NormalizedHeadroom != 0.1 || item.Target.Weight != 1100 {
+		t.Errorf("snapshot lost headroom transform: %+v", item)
+	}
+}
+
 func TestApply_Success(t *testing.T) {
 	h := &mockHost{
 		patchedPriority: map[string]int{},

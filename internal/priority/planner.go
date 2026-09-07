@@ -93,9 +93,15 @@ type PlanItem struct {
 	// ForceWrite 允许无本轮 fresh 证据的同伴因同 provider 优先级去重而写回宿主。
 	ForceWrite bool
 	Reason     string
-	// RemainingHeadroom 是排序时实际使用的配速富余度快照（remainingHeadroom 的结果，
-	// 与驱动 Weight 的是同一个指标），供审计/展示使用。
-	RemainingHeadroom float64
+	// RawHeadroom 是按最保守配额窗口计算的原始配速富余度；允许为负，绝不受
+	// Codex reset-credit boost 或全局归一化影响，供配速诊断使用。
+	RawHeadroom float64
+	// HeadroomUplift 是本轮所有可调度（fresh Remaining > 0）凭证共享的全局平移量。
+	HeadroomUplift float64
+	// NormalizedHeadroom = RawHeadroom + HeadroomUplift，是 reset-credit boost 前的
+	// 调度基础值。RemainingHeadroom 保留为同一数值的兼容别名。
+	NormalizedHeadroom float64
+	RemainingHeadroom  float64
 	// AvailableResetCredits/NearestResetCreditExpiresAt 语义同 ProbeEvidence 同名字段。
 	AvailableResetCredits       int
 	NearestResetCreditExpiresAt *time.Time
@@ -124,13 +130,11 @@ func PlanFreshOnly(credentials []core.Credential, evidence []ProbeEvidence, opti
 	freshByAuth := freshEvidenceByAuthIndex(evidence)
 	cachedByAuth := cachedEvidenceByAuthIndex(evidence)
 	items := initialItems(credentials, freshByAuth, cachedByAuth)
+	populateHeadrooms(items, options.Now)
 	planFreshPositive(items, options)
 	// 跨账号全局优先级去重：保证全量启用态正优先级槽位唯一，且直接反映全局 Pacing 排序
 	ensureUniquePriorities(items, options)
 	sortPlanItems(items)
-	for i := range items {
-		items[i].RemainingHeadroom = remainingHeadroom(items[i], options.Now)
-	}
 	return Plan{Items: items, Changes: changes(items, options)}
 }
 
@@ -233,26 +237,68 @@ const weightScaleReference = 1000
 // weight<=0 from the rotation entirely (its positiveWeightAuths filter) —
 // weight 0 is not "a tiny trickle of traffic", it is "none at all". Flooring
 // at 1 guarantees every currently-healthy credential in the shared tier
-// keeps at least a minimal share — including one that has already burned
-// past its pace target (remainingHeadroom floors to 0 for it) — so it is
-// never fully starved out of the rotation.
+// keeps at least a minimal share — including the credential at the normalized
+// zero baseline — so it is never fully starved out of the rotation.
 const weightFloor = 1
 
-// weightFromHeadroom maps a tier member's remaining-pace headroom (see
-// remainingHeadroom) to an integer CPA weight. Normal headroom is in [0,1];
-// an expiring Codex reset credit may intentionally boost it above 1.0.
-// The result is linearly proportional to weightScaleReference and floored at
-// weightFloor.
-// headroom=1.0 (full remaining-pace headroom) -> weightScaleReference;
-// headroom=0 (already burned past pace target, no headroom left) still maps
-// to weightFloor rather than 0, so it keeps a minimal share of traffic
-// instead of being excluded from CPA's weighted rotation entirely.
+// weightFromHeadroom maps a tier member's normalized scheduling headroom to an
+// integer CPA weight. The shared uplift guarantees this value is non-negative;
+// an expiring Codex reset credit may intentionally boost the final weight input
+// above 1.0. The result is linearly proportional to weightScaleReference and
+// floored at weightFloor.
+// normalized headroom=1.0 -> weightScaleReference;
+// normalized headroom=0 still maps to weightFloor rather than 0, so it keeps a
+// minimal share of traffic instead of being excluded from CPA's weighted rotation entirely.
 func weightFromHeadroom(headroom float64) int {
 	weight := int(math.Round(weightScaleReference * headroom))
 	if weight < weightFloor {
 		return weightFloor
 	}
 	return weight
+}
+
+// populateHeadrooms keeps raw pace diagnostics separate from scheduling adjustments.
+// Only fresh credentials with actual positive remaining quota can join the shared
+// priority tier, so only those credentials define and receive the global uplift.
+// Accounts with depleted quota retain zero normalized headroom and cannot be
+// revived by either uplift or the Codex reset-credit weight adjustment.
+func populateHeadrooms(items []PlanItem, now time.Time) {
+	eligible := make([]int, 0, len(items))
+	minRaw := math.Inf(1)
+	for index := range items {
+		raw := rawRemainingHeadroom(items[index], now)
+		items[index].RawHeadroom = raw
+		items[index].NormalizedHeadroom = raw
+		items[index].RemainingHeadroom = raw // compatibility alias
+		if !isFreshPositiveTierMember(items[index]) {
+			continue
+		}
+		eligible = append(eligible, index)
+		minRaw = min(minRaw, raw)
+	}
+	if len(eligible) == 0 {
+		return
+	}
+	uplift := max(0, -minRaw)
+	for _, index := range eligible {
+		items[index].HeadroomUplift = uplift
+		items[index].NormalizedHeadroom = items[index].RawHeadroom + uplift
+		items[index].RemainingHeadroom = items[index].NormalizedHeadroom // compatibility alias
+	}
+}
+
+// weightHeadroom applies the expiring Codex reset-credit boost only after raw
+// diagnostics and shared normalization have been fixed. It must never feed back
+// into RawHeadroom, HeadroomUplift, or NormalizedHeadroom.
+func weightHeadroom(item PlanItem, now time.Time) float64 {
+	return applyResetCreditBoost(item, item.NormalizedHeadroom, now)
+}
+
+func applyResetCreditBoost(item PlanItem, headroom float64, now time.Time) float64 {
+	if item.Remaining != nil && *item.Remaining > 0 && codexResetCreditBoostActive(item, now) {
+		return headroom + 1.0
+	}
+	return headroom
 }
 
 // planFreshPositive assigns every fresh-positive candidate (this round's
@@ -276,9 +322,8 @@ func planFreshPositive(items []PlanItem, options Options) {
 	}
 
 	for _, itemIndex := range candidates {
-		headroom := remainingHeadroom(items[itemIndex], options.Now)
 		items[itemIndex].Priority = sharedPriority
-		items[itemIndex].Weight = weightFromHeadroom(headroom)
+		items[itemIndex].Weight = weightFromHeadroom(weightHeadroom(items[itemIndex], options.Now))
 		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
 		items[itemIndex].Disabled = false
 		items[itemIndex].Reason = "fresh remaining positive"
@@ -503,23 +548,14 @@ func codexResetCreditBoostActive(item PlanItem, now time.Time) bool {
 	return untilExpiry > 0 && untilExpiry <= codexResetCreditExpiryWindow
 }
 
-// windowRemainingHeadroom 计算单个窗口的"配速富余度"：距离配速目标用量，还可以多用掉多少
-// 配额比例（0..1），而不是距离硬上限（100%）还剩多少。
+// windowRawHeadroom computes one window's raw pace surplus. It deliberately
+// preserves negative values: a negative number is pacing diagnostic evidence
+// that consumption is ahead of the target, not an exhausted-quota signal.
+// Actual quota exhaustion is decided separately from Remaining <= 0.
 //
-// 配速目标已用比例 = 1 - timeRemainingRatio（这个窗口已经流逝的时间比例，假设配额应随时间
-// 匀速消耗，此刻"本该"用掉这么多）；实际已用比例 = 1 - remainingRatio。两者之差
-// （配速目标已用比例 - 实际已用比例，等价于 remainingRatio - timeRemainingRatio）就是
-// "追上配速目标之前，还能多用掉多少百分比"。若实际已用比例已经追上或超过配速目标（差值为
-// 负），说明没有富余空间了，floor 到 0——注意这里只把"没有富余"floor 到 0，最终写回 CPA
-// 的整数 weight 仍会在 weightFromHeadroom 里被 floor 到 weightFloor（而非 0），避免这类
-// "已落后于配速"的账号被 WeightedRoundRobinSelector 的 weight<=0 过滤器踢出轮转。
-//
-// 两处边界特判（均直接给满 headroom=1.0，不计算时间比例）：
-//   - remaining>=100：额度周期到点但计费尚未真正开始（部分 provider 的计费窗口从首次消费才
-//     开始计时），此时剩余时间比例不可信，视同"完全没有落后于配速"。
-//   - timeRemaining<=0：reset 时间已过但 remaining 尚未刷新（陈旧/边界数据），同样不信任此刻
-//     算出的时间比例，按满 headroom 处理。
-func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
+// The two boundary cases still return a full 1.0: remaining>=100 indicates a
+// not-yet-started billing period, and an already-passed reset is stale data.
+func windowRawHeadroom(remaining int64, resetAt time.Time, duration time.Duration, now time.Time) float64 {
 	if remaining >= 100 {
 		return 1.0
 	}
@@ -538,38 +574,21 @@ func windowRemainingHeadroom(remaining int64, resetAt time.Time, duration time.D
 		timeRemainingRatio = 0.001
 	}
 
-	headroom := remainingRatio - timeRemainingRatio
-	if headroom < 0 {
-		headroom = 0
-	}
-	return headroom
+	return remainingRatio - timeRemainingRatio
 }
 
-// remainingHeadroom 是 windowRemainingHeadroom 的多窗口/多字段入口，窗口来源级联与瓶颈窗口
-// 选取（多窗口时取 headroom 最小的那个）：Windows 列表 -> ShortWindowRemaining/
-// LongWindowRemaining 短长窗口对 -> legacy 单窗口回退（legacyRemainingHeadroom）。
-//
-// Codex "即将过期银行化重置额度" 提升（见 codexResetCreditBoostActive）只作用于这条驱动
-// weight 的链路：在按正常规则算出瓶颈 headroom 之后，命中条件时直接 +1.0，不做任何上限
-// clamp。之所以不是把 headroom 封顶在 1.0（满额）：如果只封顶到 1.0，这个即将浪费的账号会
-// 和一个普通满额账号（headroom 同样是 1.0）算出完全一样的 weight，起不到"应该被优先消耗掉"
-// 的效果；不封顶让它的 headroom 能明显超过 1.0（比如 0.5+1.0=1.5），对应 weight 明显超过
-// 1000 这个正常上限，CPA 的 WeightedRoundRobinSelector 才会真的把更大比例的流量倾斜过去，
-// 加速消耗这笔即将作废的额度，这才是提升机制的本意。即使正常算出的 headroom 已经 floor 到
-// 0（已经落后于配速），+1.0 后仍能拿到 1.0，不会因为这类账号"原本就差"而在提升上吃亏。
-func remainingHeadroom(item PlanItem, now time.Time) float64 {
+// rawRemainingHeadroom is the multi-window raw diagnostic. The most constrained
+// window wins, including when that result is negative. It is intentionally
+// independent of normalization and reset-credit policy.
+func rawRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	if item.Remaining == nil || *item.Remaining <= 0 {
-		return 0 // 短路：primary 窗口已耗尽，理论上不会进入共享 tier
+		return 0
 	}
-	headroom := unboostedRemainingHeadroom(item, now)
-	if codexResetCreditBoostActive(item, now) {
-		headroom += 1.0
-	}
-	return headroom
+	return unboostedRemainingHeadroom(item, now)
 }
 
-// unboostedRemainingHeadroom 按正常规则（不含任何提升）计算瓶颈窗口的 headroom，供
-// remainingHeadroom 在此基础上叠加 Codex reset-credit 提升。
+// unboostedRemainingHeadroom calculates the bottleneck raw headroom from quota
+// windows, paired short/long fields, or the legacy single-window fallback.
 func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	if len(item.Windows) > 0 {
 		headrooms := make([]float64, 0, len(item.Windows))
@@ -577,7 +596,7 @@ func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 			if w.Duration <= 0 || w.ResetAt.IsZero() {
 				continue
 			}
-			headrooms = append(headrooms, windowRemainingHeadroom(w.Remaining, w.ResetAt, w.Duration, now))
+			headrooms = append(headrooms, windowRawHeadroom(w.Remaining, w.ResetAt, w.Duration, now))
 		}
 		if len(headrooms) > 0 {
 			return slices.Min(headrooms)
@@ -586,10 +605,10 @@ func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 
 	headrooms := make([]float64, 0, 2)
 	if item.ShortWindowRemaining != nil && item.ShortWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
+		headrooms = append(headrooms, windowRawHeadroom(*item.ShortWindowRemaining, *item.ShortWindowResetAt, shortWindowDuration, now))
 	}
 	if item.LongWindowRemaining != nil && item.LongWindowResetAt != nil {
-		headrooms = append(headrooms, windowRemainingHeadroom(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
+		headrooms = append(headrooms, windowRawHeadroom(*item.LongWindowRemaining, *item.LongWindowResetAt, longWindowDuration, now))
 	}
 	if len(headrooms) > 0 {
 		return slices.Min(headrooms)
@@ -598,8 +617,9 @@ func unboostedRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	return legacyRemainingHeadroom(item, now)
 }
 
-// legacyRemainingHeadroom 是新字段未提供时（xAI 等）的单窗口启发式回退路径。不含提升逻辑——
-// 由 remainingHeadroom 统一在最终结果上叠加。
+// legacyRemainingHeadroom is the single-window heuristic fallback when newer
+// fields are absent (for example xAI). It produces only raw diagnostics; global
+// uplift and reset-credit policy are applied later in the scheduling pipeline.
 func legacyRemainingHeadroom(item PlanItem, now time.Time) float64 {
 	remaining := *item.Remaining
 	if remaining >= 100 {
@@ -643,11 +663,7 @@ func legacyRemainingHeadroom(item PlanItem, now time.Time) float64 {
 		timeRemainingRatio = 0.001
 	}
 
-	headroom := remainingRatio - timeRemainingRatio
-	if headroom < 0 {
-		headroom = 0
-	}
-	return headroom
+	return remainingRatio - timeRemainingRatio
 }
 
 func paidRank(planType core.PlanType) int {

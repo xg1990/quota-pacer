@@ -44,7 +44,13 @@ type SnapshotItem struct {
 	ShortWindowResetAt   *time.Time         `json:"short_window_reset_at"`
 	LongWindowRemaining  *int64             `json:"long_window_remaining"`
 	Windows              []core.QuotaWindow `json:"windows,omitempty"`
-	RemainingHeadroom    float64            `json:"remaining_headroom"`
+	// RawHeadroom preserves the unclamped bottleneck pace diagnostic. The shared
+	// global uplift and normalized headroom make the scheduling transform explicit.
+	RawHeadroom        float64 `json:"raw_headroom"`
+	HeadroomUplift     float64 `json:"headroom_uplift"`
+	NormalizedHeadroom float64 `json:"normalized_headroom"`
+	// RemainingHeadroom is a backwards-compatible alias for NormalizedHeadroom.
+	RemainingHeadroom float64 `json:"remaining_headroom"`
 	// AvailableResetCredits/NearestResetCreditExpiresAt：仅 Codex，供 pace 计算表格展示
 	// "即将过期额度加速消耗"提升是否命中，非敏感数值/时间字段，无需脱敏。
 	AvailableResetCredits       int        `json:"available_reset_credits,omitempty"`
@@ -143,6 +149,9 @@ func snapshotItem(item priority.PlanItem) SnapshotItem {
 		ShortWindowResetAt:          item.ShortWindowResetAt,
 		LongWindowRemaining:         item.LongWindowRemaining,
 		Windows:                     item.Windows,
+		RawHeadroom:                 item.RawHeadroom,
+		HeadroomUplift:              item.HeadroomUplift,
+		NormalizedHeadroom:          item.NormalizedHeadroom,
 		RemainingHeadroom:           item.RemainingHeadroom,
 		AvailableResetCredits:       item.AvailableResetCredits,
 		NearestResetCreditExpiresAt: item.NearestResetCreditExpiresAt,
