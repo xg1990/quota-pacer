@@ -326,7 +326,7 @@ func TestPlanFreshOnly_CrossProvider_HeadroomWeighting(t *testing.T) {
 		}
 	}
 	// 预期 weight 排序（headroom = remainingRatio - timeRemainingRatio，均走 7d 长窗口基准）：
-	// Claude 0.51-43/168≈0.254 > Codex 0.80-120/168≈0.086 > Antigravity 0.65-140/168<0（floor 0）
+	// Claude 0.51-43/168≈0.254 > Codex 0.80-120/168≈0.086 > Antigravity 0.65-140/168<0（raw 为负，正规化后仍垫底）
 	if weightByAuth["auth-claude-urgent"] <= weightByAuth["auth-codex-mid"] {
 		t.Errorf("expected claude weight > codex weight, got claude=%d codex=%d",
 			weightByAuth["auth-claude-urgent"], weightByAuth["auth-codex-mid"])
@@ -424,7 +424,7 @@ func TestPlanFreshOnly_Headroom_WeeklyWindow(t *testing.T) {
 		}
 	}
 	// headroom（均走 7d 长窗口基准）：auth-slow 0.80-48/168≈0.514 > auth-mid 0.80-96/168≈0.229
-	// > auth-fast 0.10-48/168<0（floor 0）
+	// > auth-fast 0.10-48/168<0（raw 为负，正规化后仍垫底）
 	if weightByAuth["auth-slow"] <= weightByAuth["auth-mid"] {
 		t.Errorf("expected auth-slow weight > auth-mid weight, got slow=%d mid=%d", weightByAuth["auth-slow"], weightByAuth["auth-mid"])
 	}
@@ -468,8 +468,9 @@ func TestPlanFreshOnly_Headroom_CodexDualWindowMismatch(t *testing.T) {
 		t.Fatalf("expected 1 plan item, got %d", len(plan.Items))
 	}
 
-	// 期望：headroom = 0.50 - 3h/5h = -0.1 -> floor 0（已落后于配速）。若退化回旧逻辑
-	// （无条件借用 7 天基准）会得到 0.50 - 3h/168h ≈ 0.482（明显富余），两者差距悬殊，
+	// 期望：raw headroom = 0.50 - 3h/5h = -0.1（不封底，允许为负）。这是唯一一个 fresh-positive
+	// 账号，全局 uplift = max(0, -(-0.1)) = 0.1，normalized = -0.1+0.1 = 0（已落后于配速，垫底）。
+	// 若退化回旧逻辑（无条件借用 7 天基准）会得到 raw ≈ 0.482（明显富余），两者差距悬殊，
 	// 足以捕捉回归。
 	got := plan.Items[0].RemainingHeadroom
 	want := 0.0
@@ -616,7 +617,8 @@ func TestPlanFreshOnly_Headroom_FreeVersusPaid(t *testing.T) {
 	}
 
 	// 移除 paid-first 规则后，纯按"距离配速目标还能多用多少"排序：
-	// auth-ag-free 满额 -> headroom=1.0 满值；auth-codex-plus 0.33-139/168<0 -> floor 0。
+	// auth-ag-free 满额 -> raw=1.0；auth-codex-plus raw=0.33-139/168≈-0.483（不封底）。
+	// 全局 uplift = max(0, 0.483) = 0.483：ag-free normalized≈1.483，codex-plus normalized=0（垫底）。
 	// 两者共享同一个 priority tier（100），不再靠 priority 差异体现。
 	for _, item := range plan.Items {
 		if item.Priority != 100 {
@@ -635,7 +637,7 @@ func TestPlanFreshOnly_Headroom_FreeVersusPaid(t *testing.T) {
 func TestPlanFreshOnly_Headroom_MultiWindow_ShortWindowTighter(t *testing.T) {
 	now := time.Date(2026, 8, 28, 9, 0, 0, 0, time.UTC)
 
-	// 短窗口：10% 剩余，1h 后重置 -> headroom = 0.10 - 1/5 = -0.1 -> floor 0（更紧张）
+	// 短窗口：10% 剩余，1h 后重置 -> raw headroom = 0.10 - 1/5 = -0.1（更紧张，不封底）
 	shortReset := now.Add(1 * time.Hour)
 	shortRem := int64(10)
 	// 长窗口：80% 剩余，84h 后重置 -> headroom = 0.80 - 84/168 = 0.30
@@ -682,7 +684,7 @@ func TestPlanFreshOnly_Headroom_MultiWindow_LongWindowTighter(t *testing.T) {
 	// 短窗口：80% 剩余，1h 后重置 -> headroom = 0.80 - 1/5 = 0.60
 	shortReset := now.Add(1 * time.Hour)
 	shortRem := int64(80)
-	// 长窗口：10% 剩余，84h 后重置 -> headroom = 0.10 - 84/168 = -0.4 -> floor 0（更紧张）
+	// 长窗口：10% 剩余，84h 后重置 -> raw headroom = 0.10 - 84/168 = -0.4（更紧张，不封底）
 	longReset := now.Add(84 * time.Hour)
 	longRem := int64(10)
 	primaryRem := int64(50)

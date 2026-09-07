@@ -305,7 +305,7 @@ func applyResetCreditBoost(item PlanItem, headroom float64, now time.Time) float
 // live probe evidence, Remaining > 0) to the SAME shared top priority,
 // replacing the old strictly-unique-descending-priority ranking. Relative
 // health is now expressed entirely through Weight (weightFromHeadroom, driven
-// by remainingHeadroom — "距离配速目标用量，还可以多用掉多少百分比" — not by
+// by weightHeadroom / NormalizedHeadroom — "距离配速目标用量，还可以多用掉多少百分比" — not by
 // relative remaining headroom within the tier), which CPA's
 // weighted-round-robin scheduler uses to proportionally split concurrent
 // traffic among same-priority credentials — see ensureUniquePriorities for
