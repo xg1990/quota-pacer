@@ -227,7 +227,7 @@ func inferPlanType(value string) core.PlanType {
 		return core.PlanTypePlus
 	case "pro":
 		return core.PlanTypePro
-	case "team":
+	case "team", "business", "self_serve_business_prolite":
 		return core.PlanTypeTeam
 	default:
 		return core.PlanTypeUnknown
