@@ -11,6 +11,7 @@ Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that au
 ## Navigation
 
 - [Overview](#overview)
+- [Why Weight, Not Priority Alone](#why-weight-not-priority-alone)
 - [Workflow](#workflow)
 - [Remaining Headroom](#remaining-headroom)
 - [Build and Installation](#build-and-installation)
@@ -29,6 +30,16 @@ Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that au
 - Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
 - **Configuration** is managed via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.quota-pacer`.
 - **Plugin management page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual sorting triggers.
+
+## Why Weight, Not Priority Alone
+
+CLIProxyAPI's `fill-first` routing strategy sends all traffic to the single top-ranked credential until it is exhausted or enters cooldown, only then failing over to the next one. Under concurrent load this caps the achievable concurrency at whatever that one credential's own rate limit allows — even while several other credentials still have healthy quota sitting idle.
+
+quota-pacer targets CPA's `weighted-round-robin` strategy instead. Within the same priority tier, requests are distributed across all healthy credentials in proportion to `weight` (a Smooth Weighted Round Robin scheduler), so concurrent traffic is spread across multiple accounts instead of stacking on one. Aggregate concurrency then approaches the *sum* of all healthy credentials' individual limits, rather than being bottlenecked by a single one.
+
+`priority` still acts as the hard tier gate — the scheduler only ever picks from the currently healthiest priority tier. `weight` is orthogonal: it only decides the proportional split *within* that tier. This is why quota-pacer computes `remaining_headroom` into a `weight` value rather than only reshuffling `priority`.
+
+Note: CPA's `session-affinity` keeps an already-bound long-running session pinned to its original credential for prompt-cache consistency — only new sessions are distributed by weight. Seeing this on first switching strategies is expected behavior, not a bug.
 
 ## Workflow
 

@@ -11,6 +11,7 @@ Quota Pacer（原 credential-priority）是面向 CLIProxyAPI (CPA) 的多提供
 ## 导航
 
 - [功能概览](#功能概览)
+- [为什么用权重而非仅优先级](#为什么用权重而非仅优先级)
 - [工作流程](#工作流程)
 - [配速富余度](#配速富余度)
 - [构建与安装](#构建与安装)
@@ -29,6 +30,16 @@ Quota Pacer（原 credential-priority）是面向 CLIProxyAPI (CPA) 的多提供
 - 状态页、诊断、快照与日志只输出脱敏后的凭证信息。
 - **配置管理**：通过 CPA **插件管理可视化配置字段**（`ConfigFields`）编辑，或直接修改 `config.yaml` / `plugins.configs.quota-pacer`。
 - **插件页**支持 Management Key 验证、概览（只读生效配置）、执行记录（近 5 次）、帮助，以及手动触发排序。
+
+## 为什么用权重而非仅优先级
+
+CLIProxyAPI 的 `fill-first`（默认）路由策略会把全部流量压给排序最靠前的单一凭证，直到它耗尽或进入冷却，才会轮到下一个。这意味着即使还有多个凭证配额充裕、处于空闲状态，并发上限也会被死死卡在这一个凭证自身的速率限制上——这正是多凭证场景下"高并发时反而吞吐上不去"的根因。
+
+quota-pacer 面向的是 CPA 的 `weighted-round-robin` 调度策略：在同一优先级档位内，请求会按 `weight` 比例（Smooth Weighted Round Robin 平滑加权轮询）分发到所有健康凭证，而不是全部堆到一个账号上。这样一来，并发场景下的整体可用吞吐量趋近于多个健康凭证速率限制之和，而不是被单个账号封顶。
+
+`priority` 依然是硬性的档位门槛——调度器永远只在"当前健康的最高优先级档位"内选择；`weight` 与之正交，只负责该档位内部的比例分配。这正是 quota-pacer 把 `remaining_headroom` 换算成 `weight` 值、而不是单纯重排 `priority` 的原因。
+
+注：CPA 的 `session-affinity` 会让已建立的长会话继续粘在原凭证上（为了保持 prompt cache 一致性），只有新会话才会按权重重新分发——首次切换调度策略时看到这个现象是设计使然，不是 bug。
 
 ## 工作流程
 
