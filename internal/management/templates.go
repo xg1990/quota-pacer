@@ -16,6 +16,7 @@ const StatusHTML = `<!DOCTYPE html>
         .topbar { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:24px; }
         .topbar-actions { display:flex; align-items:flex-start; justify-content:flex-end; gap:12px; flex:1; }
         h1 { margin:0; font-size:28px; letter-spacing:-.03em; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+        h1 .title-text { white-space:nowrap; }
         .version-badge { display:inline-flex; align-items:center; min-height:24px; border-radius:999px; padding:3px 9px; background:#eff6ff; color:#1d4ed8; font-size:12px; font-weight:750; }
         h2 { margin:0 0 16px; font-size:18px; }
         p { margin:0; color:var(--muted); line-height:1.65; }
@@ -73,6 +74,8 @@ const StatusHTML = `<!DOCTYPE html>
         .pacing-table th, .pacing-table td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }
         .pacing-table th { color:var(--muted); font-weight:650; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
         .pacing-table tr:last-child td { border-bottom:none; }
+        .pacing-table td.num, .pacing-table th.num { text-align:right; font-variant-numeric:tabular-nums; }
+        .pacing-table tr.pacing-row-depleted { opacity:.5; }
         .pacing-score-cell { font-weight:700; color:var(--blue); }
         .pacing-meta-hint { margin-bottom:12px; }
         .history-card-header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:4px; }
@@ -114,7 +117,7 @@ const StatusHTML = `<!DOCTYPE html>
 <body>
     <div class="container">
         <div class="topbar">
-            <h1><span data-i18n="pageTitle">凭证优先级管理</span><span class="version-badge">v1.0.1</span></h1>
+            <h1><span class="title-text" data-i18n="pageTitle">凭证优先级管理</span><span id="versionBadge" class="version-badge"></span></h1>
             <div class="topbar-actions">
                 <div id="toastRoot" class="toast-root" aria-live="polite"></div>
                 <div class="language-shell">
@@ -148,15 +151,15 @@ const StatusHTML = `<!DOCTYPE html>
                                     <th data-i18n="colProvider">提供商</th>
                                     <th data-i18n="colAccount">账号</th>
                                     <th data-i18n="colPlan">套餐</th>
-                                    <th data-i18n="colRemaining">剩余额度</th>
+                                    <th class="num" data-i18n="colRemaining">剩余额度</th>
                                     <th data-i18n="colWindow">窗口</th>
                                     <th data-i18n="colResetAt">重置时间</th>
-                                    <th data-i18n="colRawHeadroom">原始配速富余度</th>
-                                    <th data-i18n="colGlobalUplift">全局平移</th>
-                                    <th data-i18n="colNormalizedHeadroom">归一化配速富余度</th>
-                                    <th data-i18n="colSchedulingWeight">调度权重</th>
+                                    <th class="num" data-i18n="colRawHeadroom">原始配速富余度</th>
+                                    <th class="num" data-i18n="colGlobalUplift">全局平移</th>
+                                    <th class="num" data-i18n="colNormalizedHeadroom">归一化配速富余度</th>
+                                    <th class="num" data-i18n="colSchedulingWeight">调度权重</th>
                                     <th data-i18n="colResetCredit">重置额度</th>
-                                    <th data-i18n="colPriority">当前优先级</th>
+                                    <th class="num" data-i18n="colPriority">当前优先级</th>
                                     <th data-i18n="colEvidence">证据</th>
                                 </tr>
                             </thead>
@@ -289,12 +292,14 @@ const StatusHTML = `<!DOCTYPE html>
         function pacingAccountLabel(item){return (item&&(item.name||item.auth_index))||"";}
         function pacingWindowInfo(item,nowMs){if(Array.isArray(item&&item.windows)&&item.windows.length>0){const parts=item.windows.map(function(w){const name=w.name||"window";const rem=(w.remaining!==undefined&&w.remaining!==null)?(w.remaining+"%"):"-";let timeStr="";if(w.reset_at){const rMs=new Date(w.reset_at).getTime();if(!Number.isNaN(rMs)){const diffH=(rMs-nowMs)/3600000;if(diffH>48){timeStr=" ("+Math.round(diffH/24)+"d)";}else if(diffH>0){timeStr=" ("+Math.round(diffH)+"h)";}}}return name+": "+rem+timeStr;});const firstReset=(item.windows.find(function(w){return w.reset_at;})||{}).reset_at||item.reset_at;return {resetAt:firstReset,label:parts.join(" · ")};}if(item&&item.long_window_reset_at&&(!item.reset_at||item.reset_at===item.long_window_reset_at)){return {resetAt:item.long_window_reset_at,label:textFor("windowWeekly")};}if(item&&item.reset_at){const resetMs=new Date(item.reset_at).getTime();if(!Number.isNaN(resetMs)){const remainingHours=(resetMs-nowMs)/3600000;if(remainingHours>48){return {resetAt:item.reset_at,label:textFor("windowSevenDay")};}if(remainingHours>6){return {resetAt:item.reset_at,label:textFor("windowTwentyFourHour")};}return {resetAt:item.reset_at,label:textFor("windowFiveHour")};}}return {resetAt:null,label:textFor("windowNone")};}
         function resetCreditInfo(item){const credits=Number(item&&item.available_reset_credits||0);if(credits<=0){return "-";}const expiresAt=item&&item.nearest_reset_credit_expires_at;return String(credits)+(expiresAt?" · "+formatHistoryTime(expiresAt):"");}
-        function targetWeight(item){const weight=item&&item.target&&item.target.weight;return weight===undefined||weight===null?"-":String(weight);}
-        function renderPacingTable(){const body=document.getElementById("pacingTableBody");const emptyBox=document.getElementById("pacingTableEmpty");const metaBox=document.getElementById("pacingSnapshotMeta");if(!body||!emptyBox){return;}body.textContent="";const items=Array.isArray(pacingItemsCache)?pacingItemsCache:[];if(metaBox){metaBox.textContent=(items.length>0&&pacingSnapshotAtCache)?(textFor("pacingSnapshotAt")+summarySeparator()+formatHistoryTime(pacingSnapshotAtCache)):"";}if(items.length===0){emptyBox.hidden=false;return;}emptyBox.hidden=true;const parsedSnapshotMs=pacingSnapshotAtCache?new Date(pacingSnapshotAtCache).getTime():NaN;const baseNowMs=Number.isNaN(parsedSnapshotMs)?Date.now():parsedSnapshotMs;const sorted=items.slice().sort(function(a,b){const priorityDiff=((b.target&&b.target.priority)||0)-((a.target&&a.target.priority)||0);if(priorityDiff!==0){return priorityDiff;}return ((b.target&&b.target.weight)||0)-((a.target&&a.target.weight)||0);});for(const item of sorted){const tr=document.createElement("tr");const win=pacingWindowInfo(item,baseNowMs);const values=[getProviderDisplayName(item.provider||""),pacingAccountLabel(item),planLabel(item.plan_type),formatRemaining(item.remaining),win.label,formatHistoryTime(win.resetAt),(typeof item.raw_headroom==="number"?item.raw_headroom.toFixed(3):"-"),(typeof item.headroom_uplift==="number"?item.headroom_uplift.toFixed(3):"-"),(typeof item.normalized_headroom==="number"?item.normalized_headroom.toFixed(3):"-"),targetWeight(item),resetCreditInfo(item),String((item.target&&item.target.priority!==undefined&&item.target.priority!==null)?item.target.priority:"-"),item.evidence_fresh?textFor("evidenceFresh"):textFor("evidenceStale")];for(const value of values){const td=document.createElement("td");td.textContent=value;tr.appendChild(td);}body.appendChild(tr);}}
+        function targetWeight(item){const weight=item&&item.target&&item.target.weight;return weight===undefined||weight===null?"-":Number(weight).toFixed(2);}
+        const NUMERIC_PACING_COLUMNS=new Set([3,6,7,8,9,11]);
+        function renderPacingTable(){const body=document.getElementById("pacingTableBody");const emptyBox=document.getElementById("pacingTableEmpty");const metaBox=document.getElementById("pacingSnapshotMeta");if(!body||!emptyBox){return;}body.textContent="";const items=Array.isArray(pacingItemsCache)?pacingItemsCache:[];if(metaBox){metaBox.textContent=(items.length>0&&pacingSnapshotAtCache)?(textFor("pacingSnapshotAt")+summarySeparator()+formatHistoryTime(pacingSnapshotAtCache)):"";}if(items.length===0){emptyBox.hidden=false;return;}emptyBox.hidden=true;const parsedSnapshotMs=pacingSnapshotAtCache?new Date(pacingSnapshotAtCache).getTime():NaN;const baseNowMs=Number.isNaN(parsedSnapshotMs)?Date.now():parsedSnapshotMs;const sorted=items.slice().sort(function(a,b){const priorityDiff=((b.target&&b.target.priority)||0)-((a.target&&a.target.priority)||0);if(priorityDiff!==0){return priorityDiff;}return ((b.target&&b.target.weight)||0)-((a.target&&a.target.weight)||0);});for(const item of sorted){const tr=document.createElement("tr");const weightValue=item&&item.target&&item.target.weight;if(typeof weightValue==="number"&&weightValue<=0){tr.classList.add("pacing-row-depleted");}const win=pacingWindowInfo(item,baseNowMs);const values=[getProviderDisplayName(item.provider||""),pacingAccountLabel(item),planLabel(item.plan_type),formatRemaining(item.remaining),win.label,formatHistoryTime(win.resetAt),(typeof item.raw_headroom==="number"?item.raw_headroom.toFixed(3):"-"),(typeof item.headroom_uplift==="number"?item.headroom_uplift.toFixed(3):"-"),(typeof item.normalized_headroom==="number"?item.normalized_headroom.toFixed(3):"-"),targetWeight(item),resetCreditInfo(item),String((item.target&&item.target.priority!==undefined&&item.target.priority!==null)?item.target.priority:"-"),item.evidence_fresh?textFor("evidenceFresh"):textFor("evidenceStale")];values.forEach(function(value,index){const td=document.createElement("td");td.textContent=value;if(NUMERIC_PACING_COLUMNS.has(index)){td.classList.add("num");}if(index===9){td.classList.add("pacing-score-cell");}tr.appendChild(td);});body.appendChild(tr);}}
         function renderDiagnostics(diag){runHistoryCache=Array.isArray(diag&&diag.run_history)?diag.run_history:[];renderRunHistory();const snapshot=diag&&diag.last_result&&diag.last_result.snapshot;pacingItemsCache=Array.isArray(snapshot&&snapshot.items)?snapshot.items:[];pacingSnapshotAtCache=(runHistoryCache[0]&&runHistoryCache[0].at)||null;renderPacingTable();}
         async function loadDiagnostics(options){try{const diag=await managementFetch(DIAGNOSTICS_PATH,{method:"GET"});renderDiagnostics(diag);if(options&&options.toast){showToast(textFor("historyRefreshed"),"success");}}catch(err){runHistoryCache=[];renderRunHistory();if(options&&options.toast){handleManagementError(err);}}}
         async function refreshRunHistory(){const button=document.getElementById("refreshHistoryButton");let oldText="";if(button){button.disabled=true;oldText=button.textContent;button.textContent=textFor("running");}try{await loadDiagnostics({toast:true});}finally{if(button){button.disabled=false;button.textContent=oldText||textFor("refreshHistory");}}}
-        function initPage(){const bootstrap=window.__QUOTA_PACER_BOOTSTRAP__||{};renderConfig(bootstrap.config||null);renderCredentialSummary(bootstrap.credential_summary&&bootstrap.credential_summary.files);renderDiagnostics(bootstrap.diagnostics);}
+        function renderVersionBadge(version){const badge=document.getElementById("versionBadge");if(!badge){return;}const text=String(version||"").trim();badge.textContent=text?("v"+text):"";badge.hidden=!text;}
+        function initPage(){const bootstrap=window.__QUOTA_PACER_BOOTSTRAP__||{};renderVersionBadge(bootstrap.version);renderConfig(bootstrap.config||null);renderCredentialSummary(bootstrap.credential_summary&&bootstrap.credential_summary.files);renderDiagnostics(bootstrap.diagnostics);}
         function readSelectedProviders(selector){return Array.from(document.querySelectorAll(selector)).filter(function(item){return item.checked;}).map(function(item){return item.dataset.provider||item.dataset.manualProvider;});}
         function readProviderSelection(selectId, selector){const mode=document.getElementById(selectId).value;if(mode==="all"){return [];}return readSelectedProviders(selector);}
         function normalizeHostConfig(raw){return Object.assign({},raw||{});}

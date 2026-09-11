@@ -119,6 +119,7 @@ type bootstrapCredentialSummary struct {
 }
 
 type statusBootstrap struct {
+	Version           string                     `json:"version"`
 	Config            config.Config              `json:"config"`
 	CredentialSummary bootstrapCredentialSummary `json:"credential_summary"`
 	Diagnostics       map[string]any             `json:"diagnostics"`
@@ -128,6 +129,7 @@ type statusBootstrap struct {
 // 也不向未认证访问者暴露内部错误细节。
 func (h *Handler) buildBootstrap(ctx context.Context) statusBootstrap {
 	var data statusBootstrap
+	data.Version = config.PluginVersion
 	if cfg, err := h.runner.Config(ctx); err == nil {
 		data.Config = cfg
 	}
