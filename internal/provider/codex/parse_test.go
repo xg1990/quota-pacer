@@ -369,3 +369,18 @@ func TestParseWhamUsage_FreeMonthly(t *testing.T) {
 	}
 }
 
+func TestParseWhamUsage_BusinessWeeklyOnly(t *testing.T) {
+	observedAt := time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC)
+	for _, plan := range []string{"business", "self_serve_business_prolite"} {
+		t.Run(plan, func(t *testing.T) {
+			payload := `{"plan_type":"` + plan + `","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":0,"limit_window_seconds":604800,"reset_at":1789501574},"secondary_window":null}}`
+			result := ParseWhamUsage([]byte(payload), observedAt)
+			if result.Status != StatusReady || result.PlanType != core.PlanTypeTeam || result.Window != WindowWeekly {
+				t.Fatalf("expected paid weekly Business quota, got %+v", result)
+			}
+			if result.Remaining == nil || *result.Remaining != 100 || result.ResetAt == nil || result.ResetAt.Unix() != 1789501574 {
+				t.Fatalf("lost Business quota/reset: %+v", result)
+			}
+		})
+	}
+}
